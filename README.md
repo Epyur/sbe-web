@@ -5,8 +5,6 @@
 
 Автор: Полищук Евгений (polishchuk@tn.ru).
 
-Прод: <https://epyur.fvds.ru/app/>.
-
 ## Разработка
 
 ```
@@ -31,4 +29,4 @@ npm run build
 `dist/` копируется на сервер в `/opt/mailers/www/app/` (Caddy отдаёт статику по
 `/app/*`, см. `sbe-core/docker/AGENTS.md`). Деплой — вручную (`scp`), без CI.
 
-См. `AGENTS.md` и `specification.md` для архитектуры и API.
+См. `AGENTS.md` для архитектуры и API.
