@@ -1,4 +1,4 @@
-# AGENTS.md — sbe-web («ЦУП Веб»)
+# AGENTS.md — sbe-web («LogicTEAM.WWW»)
 
 Веб-портал SBE — единственный клиент в проекте, который не является Obsidian-плагином
 (нет `manifest.json`, никогда не грузится в Obsidian). По аналогии с `mobile/`

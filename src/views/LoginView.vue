@@ -31,7 +31,7 @@ async function submit(): Promise<void> {
   <div class="sw-center-screen">
     <div class="sw-card sw-auth-card">
       <template v-if="!sent">
-        <h1>ЦУП Веб</h1>
+        <h1>LogicTEAM.WWW</h1>
         <p>Введите рабочую почту — придёт ссылка для входа, действует 5 минут.</p>
         <form @submit.prevent="submit">
           <div class="sw-field">

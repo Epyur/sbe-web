@@ -1,4 +1,4 @@
-# ЦУП Веб
+# LogicTEAM.WWW
 
 Веб-портал SBE: браузерный доступ (без Obsidian) к Фотобанку (просмотр/поиск)
 и Заявкам на испытания (admin-уровень, без superadmin). Vue 3 + Vite + TypeScript.

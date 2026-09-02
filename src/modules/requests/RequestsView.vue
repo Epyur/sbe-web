@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import * as labApi from '../../api/labApi';
 import { errorMessage } from '../../api/http';
+import { useCollapsed } from '../../composables/useCollapsed';
 import type { Lab, LabMethod, LabObject, LabProject, LabRequest } from '../../types/requests';
 import ProjectTree, { type ProjectNode } from './ProjectTree.vue';
 import RequestDetail from './RequestDetail.vue';
@@ -10,6 +11,8 @@ import RequestCreateModal from './RequestCreateModal.vue';
 import GroupsPanel from './GroupsPanel.vue';
 import PermissionsPanel from './PermissionsPanel.vue';
 import ProjectsPanel from './ProjectsPanel.vue';
+
+const { collapsed: sidebarCollapsed, toggle: toggleSidebar } = useCollapsed('sw_sidebar_collapsed_requests');
 
 type SidePanel = 'requests' | 'projects' | 'groups' | 'permissions';
 
@@ -105,39 +108,44 @@ watch(showCreate, (v) => {
 
 <template>
   <div class="sw-layout">
-    <aside class="sw-sidebar">
-      <ul class="sw-tree">
-        <li>
-          <div
-            class="sw-tree__item"
-            :class="{ 'sw-tree__item--active': panel === 'requests' && activeProjectId === null }"
-            @click="panel = 'requests'; activeProjectId = null; backToList()"
-          >
-            🧪 Все заявки
-          </div>
-        </li>
-        <li v-if="canEdit">
-          <div class="sw-tree__item" :class="{ 'sw-tree__item--active': panel === 'projects' }" @click="panel = 'projects'">
-            📁 Проекты
-          </div>
-        </li>
-        <li>
-          <div class="sw-tree__item" :class="{ 'sw-tree__item--active': panel === 'groups' }" @click="panel = 'groups'">
-            👥 Группы
-          </div>
-        </li>
-        <li v-if="isAdmin">
-          <div class="sw-tree__item" :class="{ 'sw-tree__item--active': panel === 'permissions' }" @click="panel = 'permissions'">
-            🔐 Права доступа
-          </div>
-        </li>
-      </ul>
-      <div class="sw-section-title">Проекты</div>
-      <ProjectTree
-        :nodes="projectTree"
-        :active-id="panel === 'requests' ? activeProjectId : null"
-        @select="(id) => { panel = 'requests'; activeProjectId = id; backToList(); }"
-      />
+    <aside class="sw-sidebar" :class="{ 'is-collapsed': sidebarCollapsed }">
+      <button class="sw-sidebar__toggle" type="button" :title="sidebarCollapsed ? 'Развернуть' : 'Свернуть'" @click="toggleSidebar">
+        {{ sidebarCollapsed ? '»' : '«' }}
+      </button>
+      <template v-if="!sidebarCollapsed">
+        <ul class="sw-tree">
+          <li>
+            <div
+              class="sw-tree__item"
+              :class="{ 'sw-tree__item--active': panel === 'requests' && activeProjectId === null }"
+              @click="panel = 'requests'; activeProjectId = null; backToList()"
+            >
+              🧪 Все заявки
+            </div>
+          </li>
+          <li v-if="canEdit">
+            <div class="sw-tree__item" :class="{ 'sw-tree__item--active': panel === 'projects' }" @click="panel = 'projects'">
+              📁 Проекты
+            </div>
+          </li>
+          <li>
+            <div class="sw-tree__item" :class="{ 'sw-tree__item--active': panel === 'groups' }" @click="panel = 'groups'">
+              👥 Группы
+            </div>
+          </li>
+          <li v-if="isAdmin">
+            <div class="sw-tree__item" :class="{ 'sw-tree__item--active': panel === 'permissions' }" @click="panel = 'permissions'">
+              🔐 Права доступа
+            </div>
+          </li>
+        </ul>
+        <div class="sw-section-title">Проекты</div>
+        <ProjectTree
+          :nodes="projectTree"
+          :active-id="panel === 'requests' ? activeProjectId : null"
+          @select="(id) => { panel = 'requests'; activeProjectId = id; backToList(); }"
+        />
+      </template>
     </aside>
     <section class="sw-content">
       <p v-if="error" class="sw-error">{{ error }}</p>

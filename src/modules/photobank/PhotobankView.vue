@@ -3,10 +3,13 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import * as photoApi from '../../api/photoApi';
 import { errorMessage } from '../../api/http';
+import { useCollapsed } from '../../composables/useCollapsed';
 import type { PhotoFolder, PhotoItem } from '../../types/photobank';
 import FolderTree, { type FolderNode } from './FolderTree.vue';
 import PhotoDetailModal from './PhotoDetailModal.vue';
 import PhotoThumb from './PhotoThumb.vue';
+
+const { collapsed: sidebarCollapsed, toggle: toggleSidebar } = useCollapsed('sw_sidebar_collapsed_photobank');
 
 type SpecialView = 'all' | 'favorites' | 'recent';
 
@@ -132,50 +135,55 @@ function openPhoto(p: PhotoItem): void {
 
 <template>
   <div class="sw-layout">
-    <aside class="sw-sidebar">
-      <div class="sw-field">
-        <input
-          v-model="query"
-          class="sw-input"
-          placeholder="Поиск по фотобанку…"
-          @input="onSearchInput"
+    <aside class="sw-sidebar" :class="{ 'is-collapsed': sidebarCollapsed }">
+      <button class="sw-sidebar__toggle" type="button" :title="sidebarCollapsed ? 'Развернуть' : 'Свернуть'" @click="toggleSidebar">
+        {{ sidebarCollapsed ? '»' : '«' }}
+      </button>
+      <template v-if="!sidebarCollapsed">
+        <div class="sw-field">
+          <input
+            v-model="query"
+            class="sw-input"
+            placeholder="Поиск по фотобанку…"
+            @input="onSearchInput"
+          />
+        </div>
+        <ul class="sw-tree">
+          <li>
+            <div
+              class="sw-tree__item"
+              :class="{ 'sw-tree__item--active': specialView === 'all' && !activeFolderId }"
+              @click="selectAll"
+            >
+              🗂️ Все файлы
+            </div>
+          </li>
+          <li>
+            <div
+              class="sw-tree__item"
+              :class="{ 'sw-tree__item--active': specialView === 'favorites' }"
+              @click="selectSpecial('favorites')"
+            >
+              ⭐ Избранное
+            </div>
+          </li>
+          <li>
+            <div
+              class="sw-tree__item"
+              :class="{ 'sw-tree__item--active': specialView === 'recent' }"
+              @click="selectSpecial('recent')"
+            >
+              🕐 Недавние
+            </div>
+          </li>
+        </ul>
+        <div class="sw-section-title" style="margin-top: 16px">Папки</div>
+        <FolderTree
+          :nodes="folderTree"
+          :active-id="specialView === 'all' ? activeFolderId : null"
+          @select="selectFolder"
         />
-      </div>
-      <ul class="sw-tree">
-        <li>
-          <div
-            class="sw-tree__item"
-            :class="{ 'sw-tree__item--active': specialView === 'all' && !activeFolderId }"
-            @click="selectAll"
-          >
-            🗂️ Все файлы
-          </div>
-        </li>
-        <li>
-          <div
-            class="sw-tree__item"
-            :class="{ 'sw-tree__item--active': specialView === 'favorites' }"
-            @click="selectSpecial('favorites')"
-          >
-            ⭐ Избранное
-          </div>
-        </li>
-        <li>
-          <div
-            class="sw-tree__item"
-            :class="{ 'sw-tree__item--active': specialView === 'recent' }"
-            @click="selectSpecial('recent')"
-          >
-            🕐 Недавние
-          </div>
-        </li>
-      </ul>
-      <div class="sw-section-title" style="margin-top: 16px">Папки</div>
-      <FolderTree
-        :nodes="folderTree"
-        :active-id="specialView === 'all' ? activeFolderId : null"
-        @select="selectFolder"
-      />
+      </template>
     </aside>
     <section class="sw-content">
       <h2>{{ folderTitle }}</h2>
