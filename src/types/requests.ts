@@ -31,6 +31,11 @@ export interface ObjectCharacteristics {
     thickness: string;
     sto_number: string;
     sto_name: string;
+    fire_groups?: {
+      flame_group?: string;
+      flammability_gr?: string;
+      flame_spread_gr?: string;
+    };
   };
 }
 
@@ -101,6 +106,7 @@ export interface LabRequest {
   files: RequestFile[];
   created_at: string;
   updated_at: string;
+  completed_at: string;
 }
 
 export interface PullResponse {
@@ -149,5 +155,7 @@ export interface AuditLogEntry {
 export interface MyPermission {
   email: string;
   role: string;
+  /** Реальная роль без учёта активного «просмотра от лица роли» (см. store/viewAs.ts). */
+  real_role: string;
   hasAccess: boolean;
 }

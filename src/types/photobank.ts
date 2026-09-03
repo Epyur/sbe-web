@@ -50,5 +50,7 @@ export interface PullResponse {
 export interface MyPermission {
   email: string;
   role: string;
+  /** Реальная роль без учёта активного «просмотра от лица роли» (см. store/viewAs.ts). */
+  real_role: string;
   hasAccess: boolean;
 }

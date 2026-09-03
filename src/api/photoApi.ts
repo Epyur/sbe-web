@@ -1,13 +1,14 @@
 import { API_BASE } from '../config';
 import { apiRequest, assertOk, requestJSON } from './http';
 import { getToken } from './authApi';
+import { viewAsHeader } from '../store/viewAs';
 import type { MyPermission, PhotoComment, PhotoFolder, PhotoItem, PullResponse } from '../types/photobank';
 
 const APP_ID = 'photo';
 
 async function authHeader(): Promise<Record<string, string>> {
   const token = await getToken(APP_ID);
-  return { Authorization: `Bearer ${token}` };
+  return { Authorization: `Bearer ${token}`, ...viewAsHeader('photo') };
 }
 
 export async function getMyPermission(): Promise<MyPermission> {

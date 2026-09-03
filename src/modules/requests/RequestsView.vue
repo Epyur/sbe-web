@@ -4,6 +4,9 @@ import { useRoute, useRouter } from 'vue-router';
 import * as labApi from '../../api/labApi';
 import { errorMessage } from '../../api/http';
 import { useCollapsed } from '../../composables/useCollapsed';
+import { viewAsState } from '../../store/viewAs';
+import ViewAsRoleSwitcher from '../../components/ViewAsRoleSwitcher.vue';
+import { printQrLabels } from './qrPrint';
 import type { Lab, LabMethod, LabObject, LabProject, LabRequest } from '../../types/requests';
 import ProjectTree, { type ProjectNode } from './ProjectTree.vue';
 import RequestDetail from './RequestDetail.vue';
@@ -27,9 +30,11 @@ const objects = ref<LabObject[]>([]);
 const loading = ref(false);
 const error = ref('');
 const role = ref('');
+const realRole = ref('');
 const panel = ref<SidePanel>('requests');
 const activeProjectId = ref<number | null>(null);
 const showCreate = ref(false);
+const selectedForPrint = ref<Set<number>>(new Set());
 
 const canEdit = computed(() => role.value === 'editor' || role.value === 'admin');
 const isAdmin = computed(() => role.value === 'admin');
@@ -63,6 +68,21 @@ const filteredRequests = computed(() => {
 function objectName(r: LabRequest): string {
   return objects.value.find((o) => o.id === r.object_id)?.name ?? '';
 }
+function requestNumber(r: LabRequest): string {
+  return r.customer_number || r.lab_number || `#${r.id}`;
+}
+function toggleSelectForPrint(id: number, checked: boolean): void {
+  if (checked) selectedForPrint.value.add(id); else selectedForPrint.value.delete(id);
+}
+function clearSelectForPrint(): void {
+  selectedForPrint.value.clear();
+}
+/** Печать листа QR для отмеченных заявок — как в Obsidian-плагине (checkbox
+ * в списке → «Печать листа QR»). */
+async function printSelected(): Promise<void> {
+  const chosen = filteredRequests.value.filter((r) => selectedForPrint.value.has(r.id));
+  await printQrLabels(chosen.map((r) => ({ number: requestNumber(r), title: objectName(r) || r.title })));
+}
 function methodName(r: LabRequest): string {
   return methods.value.find((m) => m.id === r.method_id)?.name ?? '';
 }
@@ -80,11 +100,14 @@ async function loadAll(): Promise<void> {
       labApi.listObjects(),
     ]);
     role.value = perm.role;
+    realRole.value = perm.real_role;
     requests.value = reqs;
     projects.value = projs;
     labs.value = l;
     methods.value = m;
     objects.value = o;
+    const validIds = new Set(reqs.map((r) => r.id));
+    for (const id of Array.from(selectedForPrint.value)) if (!validIds.has(id)) selectedForPrint.value.delete(id);
   } catch (e: unknown) {
     error.value = errorMessage(e);
   } finally {
@@ -93,6 +116,10 @@ async function loadAll(): Promise<void> {
 }
 
 onMounted(loadAll);
+
+// Смена «просмотра от лица роли» — сервер фильтрует видимость иначе,
+// перезагружаем список заявок/проектов заново.
+watch(() => viewAsState.lab, () => { void loadAll(); });
 
 function openRequest(id: number): void {
   router.push({ name: 'requests', params: { requestId: String(id) } });
@@ -148,6 +175,7 @@ watch(showCreate, (v) => {
       </template>
     </aside>
     <section class="sw-content">
+      <ViewAsRoleSwitcher app="lab" :real-role="realRole" :roles="['admin', 'editor', 'viewer']" />
       <p v-if="error" class="sw-error">{{ error }}</p>
       <p v-if="loading" class="sw-loading">Загрузка…</p>
       <template v-else-if="panel === 'projects'">
@@ -167,6 +195,7 @@ watch(showCreate, (v) => {
           :methods="methods"
           :objects="objects"
           :can-edit="canEdit"
+          :can-change-status="isAdmin"
           @updated="loadAll"
         />
       </template>
@@ -175,11 +204,26 @@ watch(showCreate, (v) => {
           <h2 style="flex: 1; margin: 0">Заявки на испытания</h2>
           <button v-if="canEdit" class="sw-btn sw-btn--primary" type="button" @click="showCreate = true">＋ Создать</button>
         </div>
+        <div v-if="canEdit && selectedForPrint.size > 0" class="sw-toolbar" style="margin-bottom: 12px">
+          <button class="sw-btn sw-btn--primary" type="button" @click="printSelected">
+            🖶 Печать листа QR ({{ selectedForPrint.size }})
+          </button>
+          <button class="sw-btn sw-btn--ghost" type="button" @click="clearSelectForPrint">✖ Снять выбор</button>
+        </div>
         <p v-if="!filteredRequests.length" class="sw-empty">Заявок нет.</p>
         <div v-for="r in filteredRequests" :key="r.id" class="sw-card sw-req-card" @click="openRequest(r.id)">
-          <div class="sw-req-card__number">
-            {{ r.customer_number || r.lab_number || `#${r.id}` }}
-            <span class="sw-badge" :class="`sw-badge--${r.status}`">{{ r.status }}</span>
+          <div style="display: flex; align-items: center; gap: 8px">
+            <input
+              v-if="canEdit"
+              type="checkbox"
+              :checked="selectedForPrint.has(r.id)"
+              @click.stop
+              @change="toggleSelectForPrint(r.id, ($event.target as HTMLInputElement).checked)"
+            />
+            <div class="sw-req-card__number">
+              {{ requestNumber(r) }}
+              <span class="sw-badge" :class="`sw-badge--${r.status}`">{{ r.status }}</span>
+            </div>
           </div>
           <div class="sw-req-card__meta">{{ objectName(r) }} · {{ methodName(r) }}</div>
         </div>

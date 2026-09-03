@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue';
 import QRCode from 'qrcode';
 import * as labApi from '../../api/labApi';
 import { errorMessage } from '../../api/http';
+import { printQrLabels } from './qrPrint';
 import type { AuditLogEntry, Lab, LabMethod, LabObject, LabRequest } from '../../types/requests';
 
 const props = defineProps<{
@@ -11,6 +12,11 @@ const props = defineProps<{
   methods: LabMethod[];
   objects: LabObject[];
   canEdit: boolean;
+  /** Только admin (или superadmin, клэмпнутый до admin на вебе) может реально
+   *  менять статус — editor видит те же кнопки, но неактивные (см. AGENTS.md,
+   *  «управление статусом заявки»). Ограничение проверяется и на сервере
+   *  (POST /api/lab/requests/{id}/status требует admin), это не только вёрстка. */
+  canChangeStatus: boolean;
 }>();
 const emit = defineEmits<{ updated: [] }>();
 
@@ -31,6 +37,15 @@ const object = computed(() => props.objects.find((o) => o.id === request.value?.
 const method = computed(() => props.methods.find((m) => m.id === request.value?.method_id));
 const lab = computed(() => props.labs.find((l) => l.id === request.value?.lab_id));
 const requestNumber = computed(() => request.value?.customer_number || request.value?.lab_number || '');
+
+/** Дедлайн — день создания + 10 рабочих дней (≈14 календарных, по решению пользователя). */
+const DEADLINE_DAYS = 14;
+const deadline = computed(() => {
+  if (!request.value?.created_at) return '';
+  const created = new Date(request.value.created_at);
+  if (Number.isNaN(created.getTime())) return '';
+  return new Date(created.getTime() + DEADLINE_DAYS * 24 * 60 * 60 * 1000).toISOString();
+});
 
 async function load(): Promise<void> {
   loading.value = true;
@@ -177,10 +192,11 @@ async function toggleAudit(): Promise<void> {
 }
 
 function printQr(): void {
-  const w = window.open('', '_blank');
-  if (!w) return;
-  w.document.write(`<img src="${qrDataUrl.value}" style="width:200px" onload="window.print()" />`);
-  w.document.close();
+  if (!request.value) return;
+  void printQrLabels([{
+    number: requestNumber.value || `#${request.value.id}`,
+    title: object.value?.name || request.value.title || '',
+  }]);
 }
 
 function formatDate(iso: string): string {
@@ -246,10 +262,25 @@ function formatDate(iso: string): string {
         </div>
       </div>
 
+      <div class="sw-form-row">
+        <div class="sw-field">
+          <label>Дата создания</label>
+          <div>{{ formatDate(request.created_at) }}</div>
+        </div>
+        <div class="sw-field">
+          <label>Дедлайн</label>
+          <div>{{ deadline ? formatDate(deadline) : '—' }}</div>
+        </div>
+        <div class="sw-field">
+          <label>Дата завершения</label>
+          <div>{{ request.completed_at ? formatDate(request.completed_at) : '—' }}</div>
+        </div>
+      </div>
+
       <div v-if="canEdit" class="sw-toolbar">
-        <button class="sw-btn" type="button" :disabled="saving || request.status === 'new'" @click="setStatus('new')">Новая</button>
-        <button class="sw-btn" type="button" :disabled="saving || request.status === 'processing'" @click="setStatus('processing')">В работе</button>
-        <button class="sw-btn" type="button" :disabled="saving || request.status === 'completed'" @click="setStatus('completed')">Завершена</button>
+        <button class="sw-btn" :class="{ 'sw-btn--status-current': request.status === 'new' }" type="button" :disabled="!canChangeStatus || saving || request.status === 'new'" @click="setStatus('new')">Новая</button>
+        <button class="sw-btn" :class="{ 'sw-btn--status-current': request.status === 'processing' }" type="button" :disabled="!canChangeStatus || saving || request.status === 'processing'" @click="setStatus('processing')">В работе</button>
+        <button class="sw-btn" :class="{ 'sw-btn--status-current': request.status === 'completed' }" type="button" :disabled="!canChangeStatus || saving || request.status === 'completed'" @click="setStatus('completed')">Завершена</button>
       </div>
 
       <div class="sw-section-title">Результаты</div>

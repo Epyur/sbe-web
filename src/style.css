@@ -142,6 +142,14 @@ a:hover {
   border-color: var(--sw-danger);
 }
 
+.sw-btn--status-current,
+.sw-btn--status-current:disabled {
+  background: #1e8a4c;
+  border-color: #1e8a4c;
+  color: #fff;
+  opacity: 1;
+}
+
 .sw-input, .sw-select, .sw-textarea {
   border: 1px solid var(--sw-border);
   border-radius: var(--sw-radius);
@@ -449,6 +457,17 @@ a:hover {
 .sw-badge--new { background: #e6f0ff; color: #2f5cc4; }
 .sw-badge--processing { background: #fff4e0; color: #b3730a; }
 .sw-badge--completed { background: #e6f7ec; color: #1e8a4c; }
+
+.sw-view-as {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 8px 12px;
+  border-radius: var(--sw-radius);
+  background: #fff4e0;
+  border: 1px solid #f0c987;
+}
 
 .sw-form-row {
   display: grid;

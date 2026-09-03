@@ -4,7 +4,9 @@ import { useRoute, useRouter } from 'vue-router';
 import * as photoApi from '../../api/photoApi';
 import { errorMessage } from '../../api/http';
 import { useCollapsed } from '../../composables/useCollapsed';
-import type { PhotoFolder, PhotoItem } from '../../types/photobank';
+import { viewAsState } from '../../store/viewAs';
+import ViewAsRoleSwitcher from '../../components/ViewAsRoleSwitcher.vue';
+import type { MyPermission, PhotoFolder, PhotoItem } from '../../types/photobank';
 import FolderTree, { type FolderNode } from './FolderTree.vue';
 import PhotoDetailModal from './PhotoDetailModal.vue';
 import PhotoThumb from './PhotoThumb.vue';
@@ -23,6 +25,23 @@ const error = ref('');
 const query = ref('');
 const specialView = ref<SpecialView>('all');
 const selected = ref<PhotoItem | null>(null);
+const myPermission = ref<MyPermission | null>(null);
+
+async function loadPermission(): Promise<void> {
+  try {
+    myPermission.value = await photoApi.getMyPermission();
+  } catch {
+    myPermission.value = null;
+  }
+}
+
+// Смена «просмотра от лица роли» — сервер начинает фильтровать видимость
+// по-другому, поэтому перезагружаем всё, что уже было на экране.
+watch(() => viewAsState.photo, () => {
+  void loadPermission();
+  void loadFolders();
+  void loadPhotos();
+});
 
 const activeFolderId = computed<number | null>(() => {
   const raw = route.params.folderId;
@@ -119,6 +138,7 @@ watch(activeFolderId, () => {
 });
 
 onMounted(() => {
+  void loadPermission();
   void loadFolders();
   void loadPhotos();
 });
@@ -186,6 +206,12 @@ function openPhoto(p: PhotoItem): void {
       </template>
     </aside>
     <section class="sw-content">
+      <ViewAsRoleSwitcher
+        v-if="myPermission"
+        app="photo"
+        :real-role="myPermission.real_role"
+        :roles="['admin', 'editor', 'commenter', 'viewer']"
+      />
       <h2>{{ folderTitle }}</h2>
       <p v-if="error" class="sw-error">{{ error }}</p>
       <p v-if="loading" class="sw-loading">Загрузка…</p>

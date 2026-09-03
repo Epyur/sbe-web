@@ -1,6 +1,7 @@
 import { API_BASE } from '../config';
 import { apiRequest, assertOk, requestJSON } from './http';
 import { getToken } from './authApi';
+import { viewAsHeader } from '../store/viewAs';
 import type {
   AuditLogEntry, Lab, LabGroup, LabMethod, LabObject, LabProject, LabRequest,
   MyPermission, ProtocolResponse, UploadFileResponse,
@@ -10,7 +11,7 @@ const APP_ID = 'lab';
 
 async function authHeader(): Promise<Record<string, string>> {
   const token = await getToken(APP_ID);
-  return { Authorization: `Bearer ${token}` };
+  return { Authorization: `Bearer ${token}`, ...viewAsHeader('lab') };
 }
 
 async function jsonHeaders(): Promise<Record<string, string>> {
