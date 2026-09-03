@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import * as labApi from '../../api/labApi';
 import * as eknApi from '../../api/eknApi';
 import { readFireGroupValue } from '../../api/eknApi';
@@ -43,6 +43,18 @@ const sampleId = ref('');
 let eknTimer: number | undefined;
 
 const isEknMode = computed(() => eknInput.value.trim() !== '');
+
+/** Группа видимости наследуется от проекта (2026-09-03, прямой запрос
+ * пользователя) — у каждого проекта своя группа видимости (`LabProject.group_id`,
+ * задаётся при создании проекта в sbe-requests), заявка без явного выбора должна
+ * попадать в ту же группу, что и её проект. `immediate: true` — применяет и при
+ * открытии формы с уже подставленным `defaultProjectId` (переход из карточки
+ * проекта), не только при ручной смене селекта. Не блокирует последующий ручной
+ * выбор группы пользователем — просто переставляет дефолт при смене проекта. */
+watch(() => projectId.value, (id) => {
+  const project = props.projects.find((p) => p.id === id);
+  groupId.value = project?.group_id ?? 0;
+}, { immediate: true });
 
 /** Показатель по методу («ГГ — целевой показатель: ...») — methodId → значение из
  * method.determinable_indicators. Обязателен для каждого выбранного метода, у
@@ -394,7 +406,13 @@ async function submit(): Promise<void> {
 
           <div v-if="isEknMode" class="sw-field">
             <label>Номер партии (обязателен при ЕКН)</label>
-            <input v-model="batchNumber" class="sw-input" type="number" min="0" step="1" />
+            <!-- НЕ type="number" (2026-09-03, живой баг — см. AGENTS.md): Vue 3
+                 у v-model на input type="number" САМ приводит значение к числу,
+                 даже без модификатора .number — batchNumber.value переставал быть
+                 строкой, и submit() падал на batchNumber.value.trim() с "[x].value.trim
+                 is not a function". Цифровая валидация уже есть в JS (/^\d+$/ ниже),
+                 спиннер числового поля здесь не нужен. -->
+            <input v-model="batchNumber" class="sw-input" type="text" inputmode="numeric" pattern="[0-9]*" />
           </div>
 
           <div class="sw-form-row">
