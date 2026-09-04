@@ -461,19 +461,32 @@ a:hover {
 .sw-req-card__result {
   color: var(--sw-text-muted);
   font-size: 13px;
+  font-weight: 600;
   margin-top: 4px;
+  text-align: right;
 }
+
+/* Результат окрашивается по статусу «Соответствие» этой же заявки (прямое
+   решение пользователя): зелёный — соответствует, красный — не соответствует,
+   серый — не оценивается (--unknown дублирует цвет по умолчанию
+   var(--sw-text-muted) — отдельный класс всё равно оставлен для ясности и на
+   случай, если дефолт когда-нибудь станет другим). */
+.sw-req-card__result--ok { color: #1e8a4c; }
+.sw-req-card__result--bad { color: var(--sw-danger); }
+.sw-req-card__result--unknown { color: var(--sw-text-muted); }
 
 /* Соответствие целевому показателю — тот же цветовой язык, что и у
    .sw-badge--completed (нейтрально-позитивный зелёный) и .sw-btn--danger/
    var(--sw-danger) (предупреждающий красный), чтобы не изобретать новую
-   палитру статусов. */
+   палитру статусов. display:block (не inline-block) — только так
+   text-align:right ниже реально сдвигает текст к правому краю карточки. */
 .sw-req-card__compliance {
   position: relative;
-  display: inline-block;
+  display: block;
   color: var(--sw-text-muted);
   font-size: 13px;
   margin-top: 2px;
+  text-align: right;
 }
 
 .sw-req-card__compliance--ok {
@@ -487,11 +500,12 @@ a:hover {
 
 /* Popover с краткой выпиской из протокола при наведении на «Не соответствует»
    (RequestsView.vue, onComplianceEnter). Позиционирование/фон/тень — здесь;
-   стили самой таблицы — в .sw-protocol-html (вложен внутрь, не дублируем). */
+   стили самой таблицы — в .sw-protocol-html (вложен внутрь, не дублируем).
+   right:0 (не left:0) — сам текст теперь прижат к правому краю карточки. */
 .sw-req-tooltip {
   position: absolute;
   top: 100%;
-  left: 0;
+  right: 0;
   z-index: 50;
   margin-top: 6px;
   padding: 10px 12px;

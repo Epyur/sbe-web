@@ -23,6 +23,11 @@ const props = defineProps<{
    *  «управление статусом заявки»). Ограничение проверяется и на сервере
    *  (POST /api/lab/requests/{id}/status требует admin), это не только вёрстка. */
   canChangeStatus: boolean;
+  /** Email текущего пользователя (perm.email из RequestsView.loadAll) —
+   *  для клиентской проверки «владелец заявки может дозаполнить целевой
+   *  показатель» (паритет с my-email в ProjectsPanel/GroupsPanel). Реальное
+   *  ограничение — на сервере (owner_email заявки либо staff/admin). */
+  myEmail: string;
 }>();
 const emit = defineEmits<{ updated: [] }>();
 
@@ -61,6 +66,36 @@ const targetIndicator = computed(() => {
   if (methodId === undefined) return '';
   return object.value?.characteristics?.target_indicators?.[String(methodId)] ?? '';
 });
+
+/** Владелец заявки (или staff/admin через canEdit) может дозаполнить
+ * недостающий целевой показатель, только пока он реально не задан и
+ * соответствие ещё не посчитано («Не оценивается» — типичный признак
+ * отсутствующего целевого показателя у метода с несколькими determinable_indicators). */
+const canFillTargetIndicator = computed(() => {
+  return (
+    !targetIndicator.value
+    && request.value?.compliance === 'Не оценивается'
+    && (request.value?.owner_email === props.myEmail || props.canEdit)
+  );
+});
+const selectedIndicator = ref('');
+const savingIndicator = ref(false);
+
+async function saveTargetIndicator(): Promise<void> {
+  if (!request.value || !selectedIndicator.value) return;
+  savingIndicator.value = true;
+  error.value = '';
+  try {
+    await labApi.setTargetIndicator(request.value.id, selectedIndicator.value);
+    selectedIndicator.value = '';
+    await load();
+    emit('updated');
+  } catch (e: unknown) {
+    error.value = errorMessage(e);
+  } finally {
+    savingIndicator.value = false;
+  }
+}
 
 /** Дедлайн — день создания + 10 рабочих дней (≈14 календарных, по решению пользователя). */
 const DEADLINE_DAYS = 14;
@@ -366,6 +401,21 @@ function formatDate(iso: string): string {
         </tbody>
       </table>
       <p v-if="targetIndicator" class="sw-hint" style="margin-top: 8px">🎯 Целевой показатель: {{ targetIndicator }}</p>
+      <div v-else-if="canFillTargetIndicator" class="sw-form-row" style="margin-top: 8px; align-items: flex-end">
+        <div class="sw-field">
+          <label>🎯 Целевой показатель не задан — выберите</label>
+          <select class="sw-select" v-model="selectedIndicator" :disabled="savingIndicator">
+            <option value="" disabled>— выберите показатель —</option>
+            <option v-for="ind in method?.determinable_indicators ?? []" :key="ind" :value="ind">{{ ind }}</option>
+          </select>
+        </div>
+        <button
+          class="sw-btn sw-btn--primary"
+          type="button"
+          :disabled="!selectedIndicator || savingIndicator"
+          @click="saveTargetIndicator"
+        >💾 Сохранить и пересчитать</button>
+      </div>
 
       <div class="sw-section-title">Результаты</div>
       <button class="sw-btn" type="button" :disabled="protocolLoading" @click="loadProtocol">

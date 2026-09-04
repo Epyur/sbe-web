@@ -81,6 +81,19 @@ export async function setRequestStatus(id: number, status: string): Promise<void
   await assertOk(res);
 }
 
+/** Заполнить недостающий целевой показатель заявки (только когда его нет —
+ * сервер вернёт 409, если он уже задан). Успешный вызов также запускает
+ * серверный пересчёт классификации/соответствия — после него нужно заново
+ * запросить заявку (getRequest), это тело ответа не несёт. */
+export async function setTargetIndicator(requestId: number, indicator: string): Promise<void> {
+  const res = await apiRequest(`${API_BASE}/api/lab/requests/${requestId}/target-indicator`, {
+    method: 'POST',
+    headers: await jsonHeaders(),
+    body: JSON.stringify({ indicator }),
+  });
+  await assertOk(res);
+}
+
 export async function listProjects(): Promise<LabProject[]> {
   const data = await requestJSON<{ projects?: LabProject[] }>(`${API_BASE}/api/lab/projects`, {
     headers: await authHeader(),
@@ -226,6 +239,19 @@ export async function getProtocolHTML(requestId: number): Promise<string> {
 
 export async function getProtocolExcerptHTML(requestId: number): Promise<string> {
   const res = await apiRequest(`${API_BASE}/api/lab/requests/${requestId}/protocol?template=excerpt&format=html`, {
+    method: 'POST',
+    headers: await authHeader(),
+  });
+  await assertOk(res);
+  const data = (await res.json()) as ProtocolResponse;
+  return data.html;
+}
+
+/** «Справка» — отдельный, специально настраиваемый администратором вид
+ * шаблона протокола (не путать с «Выписка» / template=excerpt выше). Именно
+ * им теперь наполняется hover-подсказка над «Не соответствует» в RequestsView.vue. */
+export async function getProtocolHelpHTML(requestId: number): Promise<string> {
+  const res = await apiRequest(`${API_BASE}/api/lab/requests/${requestId}/protocol?template=help&format=html`, {
     method: 'POST',
     headers: await authHeader(),
   });

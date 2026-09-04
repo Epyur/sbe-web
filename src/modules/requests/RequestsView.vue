@@ -189,36 +189,36 @@ function onProjectDeleted(id: number): void {
   if (activeProjectId.value === id) activeProjectId.value = null;
 }
 
-// ---- Результат/Соответствие — hover-подсказка с краткой выпиской из
-// протокола (только для «Не соответствует», см. AGENTS.md на бэкенде).
-// Кэш по request.id — повторный наведение не должно повторять запрос.
-const hoveredExcerptId = ref<number | null>(null);
-const excerptCache = ref<Map<number, string>>(new Map());
-const excerptFetching = ref<Set<number>>(new Set());
+// ---- Результат/Соответствие — hover-подсказка с «Справкой» из протокола
+// (только для «Не соответствует», см. AGENTS.md на бэкенде). Кэш по
+// request.id — повторное наведение не должно повторять запрос.
+const hoveredHelpId = ref<number | null>(null);
+const helpCache = ref<Map<number, string>>(new Map());
+const helpFetching = ref<Set<number>>(new Set());
 
-async function loadExcerpt(id: number): Promise<void> {
-  if (excerptCache.value.has(id) || excerptFetching.value.has(id)) return;
-  excerptFetching.value.add(id);
+async function loadHelp(id: number): Promise<void> {
+  if (helpCache.value.has(id) || helpFetching.value.has(id)) return;
+  helpFetching.value.add(id);
   try {
-    const html = await labApi.getProtocolExcerptHTML(id);
+    const html = await labApi.getProtocolHelpHTML(id);
     // Ответ — цельный HTML-документ со своим <style>, как и у getProtocolHTML()
     // в RequestDetail.vue — v-html только на doc.body.innerHTML, не на «сырой» html.
     const doc = new DOMParser().parseFromString(html, 'text/html');
-    excerptCache.value.set(id, doc.body.innerHTML);
+    helpCache.value.set(id, doc.body.innerHTML);
   } catch (e: unknown) {
-    excerptCache.value.set(id, `<p>${errorMessage(e)}</p>`);
+    helpCache.value.set(id, `<p>${errorMessage(e)}</p>`);
   } finally {
-    excerptFetching.value.delete(id);
+    helpFetching.value.delete(id);
   }
 }
 
 function onComplianceEnter(r: LabRequest): void {
   if (r.compliance !== 'Не соответствует') return;
-  hoveredExcerptId.value = r.id;
-  void loadExcerpt(r.id);
+  hoveredHelpId.value = r.id;
+  void loadHelp(r.id);
 }
 function onComplianceLeave(): void {
-  hoveredExcerptId.value = null;
+  hoveredHelpId.value = null;
 }
 
 watch(showCreate, (v) => {
@@ -291,6 +291,7 @@ watch(showCreate, (v) => {
           :groups="groups"
           :can-edit="canEdit"
           :can-change-status="isAdmin"
+          :my-email="myEmail"
           @updated="loadAll"
         />
       </template>
@@ -322,7 +323,15 @@ watch(showCreate, (v) => {
             </div>
           </div>
           <div class="sw-req-card__meta">{{ objectName(r) }} · {{ methodName(r) }}</div>
-          <div v-if="r.result" class="sw-req-card__result">Результат: {{ r.result }}</div>
+          <div
+            v-if="r.result"
+            class="sw-req-card__result"
+            :class="{
+              'sw-req-card__result--ok': r.compliance === 'Соответствует',
+              'sw-req-card__result--bad': r.compliance === 'Не соответствует',
+              'sw-req-card__result--unknown': r.compliance === 'Не оценивается',
+            }"
+          >Результат: {{ r.result }}</div>
           <div
             v-if="r.compliance"
             class="sw-req-card__compliance"
@@ -335,9 +344,9 @@ watch(showCreate, (v) => {
             @mouseleave="onComplianceLeave"
           >
             Соответствие: {{ r.compliance }}
-            <div v-if="r.compliance === 'Не соответствует' && hoveredExcerptId === r.id" class="sw-req-tooltip">
-              <p v-if="excerptFetching.has(r.id) && !excerptCache.has(r.id)" class="sw-hint">Загрузка…</p>
-              <div v-else-if="excerptCache.has(r.id)" class="sw-protocol-html" v-html="excerptCache.get(r.id)"></div>
+            <div v-if="r.compliance === 'Не соответствует' && hoveredHelpId === r.id" class="sw-req-tooltip">
+              <p v-if="helpFetching.has(r.id) && !helpCache.has(r.id)" class="sw-hint">Загрузка…</p>
+              <div v-else-if="helpCache.has(r.id)" class="sw-protocol-html" v-html="helpCache.get(r.id)"></div>
             </div>
           </div>
         </div>
