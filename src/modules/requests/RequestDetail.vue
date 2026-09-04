@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue';
 import QRCode from 'qrcode';
 import * as labApi from '../../api/labApi';
 import { errorMessage } from '../../api/http';
+import { base64ToBlob, downloadBlob } from '../../utils/download';
 import { printQrLabels } from './qrPrint';
 import type { AuditLogEntry, Lab, LabGroup, LabMethod, LabObject, LabProject, LabRequest } from '../../types/requests';
 
@@ -172,22 +173,6 @@ async function loadProtocol(): Promise<void> {
   } finally {
     protocolLoading.value = false;
   }
-}
-
-function base64ToBlob(base64: string, mime: string): Blob {
-  const bytes = atob(base64);
-  const buf = new Uint8Array(bytes.length);
-  for (let i = 0; i < bytes.length; i++) buf[i] = bytes.charCodeAt(i);
-  return new Blob([buf], { type: mime });
-}
-
-function downloadBlob(blob: Blob, fileName: string): void {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = fileName;
-  a.click();
-  URL.revokeObjectURL(url);
 }
 
 async function downloadProtocolDocx(): Promise<void> {

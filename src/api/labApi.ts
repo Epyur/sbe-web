@@ -279,6 +279,20 @@ export async function getExportXlsxBase64(requestId: number): Promise<string> {
   return data.xlsx_base64;
 }
 
+/** Сводный экспорт .xlsx по нескольким заявкам сразу (для «Выделить все» /
+ * массового выбора в RequestsView.vue) — сервер молча исключает id, к которым
+ * у вызывающего нет доступа, и возвращает 400 только если ни один id не подошёл. */
+export async function getSummaryExportXlsxBase64(requestIds: number[]): Promise<string> {
+  const res = await apiRequest(`${API_BASE}/api/lab/requests/export-summary.xlsx`, {
+    method: 'POST',
+    headers: await jsonHeaders(),
+    body: JSON.stringify({ request_ids: requestIds }),
+  });
+  await assertOk(res);
+  const data = (await res.json()) as { xlsx_base64: string };
+  return data.xlsx_base64;
+}
+
 export async function downloadFileBlobUrl(fileKey: string): Promise<string> {
   const res = await apiRequest(`${API_BASE}/api/lab/file?key=${encodeURIComponent(fileKey)}`, {
     headers: await authHeader(),

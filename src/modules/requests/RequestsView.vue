@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import * as labApi from '../../api/labApi';
 import { errorMessage } from '../../api/http';
+import { base64ToBlob, downloadBlob } from '../../utils/download';
 import { useCollapsed } from '../../composables/useCollapsed';
 import { viewAsState } from '../../store/viewAs';
 import ViewAsRoleSwitcher from '../../components/ViewAsRoleSwitcher.vue';
@@ -128,11 +129,38 @@ function toggleSelectForPrint(id: number, checked: boolean): void {
 function clearSelectForPrint(): void {
   selectedForPrint.value.clear();
 }
+/** Выделить все заявки из текущего отфильтрованного списка (filteredRequests) —
+ * а не вообще все заявки в системе: пользователь ожидает, что «выделить все»
+ * действует на то, что он сейчас видит с учётом активных фильтров. */
+function selectAllFiltered(): void {
+  for (const r of filteredRequests.value) selectedForPrint.value.add(r.id);
+}
 /** Печать листа QR для отмеченных заявок — как в Obsidian-плагине (checkbox
  * в списке → «Печать листа QR»). */
 async function printSelected(): Promise<void> {
   const chosen = filteredRequests.value.filter((r) => selectedForPrint.value.has(r.id));
   await printQrLabels(chosen.map((r) => ({ number: requestNumber(r), title: objectName(r) || r.title })));
+}
+const exportingSummary = ref(false);
+/** Сводный .xlsx по всем отмеченным заявкам сразу (POST export-summary.xlsx) —
+ * отдельная кнопка от «Печать листа QR», не связана с ней. */
+async function downloadSelectedSummary(): Promise<void> {
+  const ids = Array.from(selectedForPrint.value);
+  if (!ids.length) return;
+  exportingSummary.value = true;
+  error.value = '';
+  try {
+    const base64 = await labApi.getSummaryExportXlsxBase64(ids);
+    const today = new Date().toISOString().slice(0, 10);
+    downloadBlob(
+      base64ToBlob(base64, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
+      `svodka_${ids.length}_zayavok_${today}.xlsx`,
+    );
+  } catch (e: unknown) {
+    error.value = errorMessage(e);
+  } finally {
+    exportingSummary.value = false;
+  }
 }
 function methodName(r: LabRequest): string {
   return methods.value.find((m) => m.id === r.method_id)?.name ?? '';
@@ -301,8 +329,12 @@ watch(showCreate, (v) => {
           <button v-if="canEdit" class="sw-btn sw-btn--primary" type="button" @click="showCreate = true">＋ Создать</button>
         </div>
         <div v-if="canEdit && selectedForPrint.size > 0" class="sw-toolbar" style="margin-bottom: 12px">
+          <button class="sw-btn sw-btn--ghost" type="button" @click="selectAllFiltered">☑ Выделить все</button>
           <button class="sw-btn sw-btn--primary" type="button" @click="printSelected">
             🖶 Печать листа QR ({{ selectedForPrint.size }})
+          </button>
+          <button class="sw-btn sw-btn--primary" type="button" :disabled="exportingSummary" @click="downloadSelectedSummary">
+            📊 {{ exportingSummary ? 'Формирование…' : `Скачать результаты (${selectedForPrint.size})` }}
           </button>
           <button class="sw-btn sw-btn--ghost" type="button" @click="clearSelectForPrint">✖ Снять выбор</button>
         </div>
