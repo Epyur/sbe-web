@@ -103,6 +103,12 @@ export interface LabRequest {
   lab_id: number;
   customer_number: string;
   lab_number: string;
+  /** Итоговый результат испытания — пусто, пока результаты не посчитаны. */
+  result: string;
+  /** Соответствие целевому показателю — пусто (нет правила у метода или
+   * результат не посчитан) либо ровно одно из трёх значений:
+   * «Соответствует» / «Не соответствует» / «Не оценивается». */
+  compliance: string;
   files: RequestFile[];
   created_at: string;
   updated_at: string;

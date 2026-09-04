@@ -458,6 +458,55 @@ a:hover {
 .sw-badge--processing { background: #fff4e0; color: #b3730a; }
 .sw-badge--completed { background: #e6f7ec; color: #1e8a4c; }
 
+.sw-req-card__result {
+  color: var(--sw-text-muted);
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+/* Соответствие целевому показателю — тот же цветовой язык, что и у
+   .sw-badge--completed (нейтрально-позитивный зелёный) и .sw-btn--danger/
+   var(--sw-danger) (предупреждающий красный), чтобы не изобретать новую
+   палитру статусов. */
+.sw-req-card__compliance {
+  position: relative;
+  display: inline-block;
+  color: var(--sw-text-muted);
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+.sw-req-card__compliance--ok {
+  color: #1e8a4c;
+}
+
+.sw-req-card__compliance--bad {
+  color: var(--sw-danger);
+  cursor: help;
+}
+
+/* Popover с краткой выпиской из протокола при наведении на «Не соответствует»
+   (RequestsView.vue, onComplianceEnter). Позиционирование/фон/тень — здесь;
+   стили самой таблицы — в .sw-protocol-html (вложен внутрь, не дублируем). */
+.sw-req-tooltip {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 50;
+  margin-top: 6px;
+  padding: 10px 12px;
+  background: var(--sw-surface);
+  border: 1px solid var(--sw-border);
+  border-radius: var(--sw-radius);
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.18);
+  max-width: 420px;
+  max-height: 320px;
+  overflow: auto;
+  white-space: normal;
+  font-size: 13px;
+  cursor: auto;
+}
+
 .sw-view-as {
   display: flex;
   align-items: center;

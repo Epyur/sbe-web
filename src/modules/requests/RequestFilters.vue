@@ -11,6 +11,9 @@ export interface RequestFiltersState {
   dateTo: string;
   /** 0 — «Все методы». */
   methodId: number;
+  /** 'all' | 'active' (new/processing) | 'completed' — 2026-09-04, прямой запрос
+   * пользователя. */
+  status: 'all' | 'active' | 'completed';
   objectName: string;
   identifier: string;
   batch: string;
@@ -19,7 +22,7 @@ export interface RequestFiltersState {
 
 export function emptyRequestFilters(): RequestFiltersState {
   return {
-    dateFrom: '', dateTo: '', methodId: 0,
+    dateFrom: '', dateTo: '', methodId: 0, status: 'all',
     objectName: '', identifier: '', batch: '', ownerEmail: '',
   };
 }
@@ -61,6 +64,14 @@ function reset(): void {
         <select v-model.number="filters.methodId" class="sw-select">
           <option :value="0">— Все —</option>
           <option v-for="m in methods" :key="m.id" :value="m.id">{{ m.code }} — {{ m.name }}</option>
+        </select>
+      </div>
+      <div class="sw-field">
+        <label>Статус</label>
+        <select v-model="filters.status" class="sw-select">
+          <option value="all">Все</option>
+          <option value="active">Активные</option>
+          <option value="completed">Завершённые</option>
         </select>
       </div>
       <div class="sw-field">

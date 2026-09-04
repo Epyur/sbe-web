@@ -33,6 +33,7 @@ const loading = ref(false);
 const error = ref('');
 const role = ref('');
 const realRole = ref('');
+const myEmail = ref('');
 const panel = ref<SidePanel>('requests');
 const activeProjectId = ref<number | null>(null);
 const showCreate = ref(false);
@@ -80,6 +81,11 @@ const filteredRequests = computed(() => {
   }
   if (f.methodId) {
     list = list.filter((r) => r.method_id === f.methodId);
+  }
+  if (f.status === 'active') {
+    list = list.filter((r) => r.status !== 'completed');
+  } else if (f.status === 'completed') {
+    list = list.filter((r) => r.status === 'completed');
   }
   if (f.objectName.trim()) {
     const q = f.objectName.trim().toLowerCase();
@@ -147,6 +153,7 @@ async function loadAll(): Promise<void> {
     ]);
     role.value = perm.role;
     realRole.value = perm.real_role;
+    myEmail.value = perm.email;
     requests.value = reqs;
     projects.value = projs;
     groups.value = grps;
@@ -173,6 +180,45 @@ function openRequest(id: number): void {
 }
 function backToList(): void {
   router.push({ name: 'requests', params: {} });
+}
+
+/** Проект, выбранный в сайдбаре, удалён из ProjectsPanel.vue — сбрасываем
+ * фильтр по нему (сам проект уже пропал из списка, оставлять activeProjectId
+ * указывающим в никуда — список заявок молча покажет 0 записей без объяснений). */
+function onProjectDeleted(id: number): void {
+  if (activeProjectId.value === id) activeProjectId.value = null;
+}
+
+// ---- Результат/Соответствие — hover-подсказка с краткой выпиской из
+// протокола (только для «Не соответствует», см. AGENTS.md на бэкенде).
+// Кэш по request.id — повторный наведение не должно повторять запрос.
+const hoveredExcerptId = ref<number | null>(null);
+const excerptCache = ref<Map<number, string>>(new Map());
+const excerptFetching = ref<Set<number>>(new Set());
+
+async function loadExcerpt(id: number): Promise<void> {
+  if (excerptCache.value.has(id) || excerptFetching.value.has(id)) return;
+  excerptFetching.value.add(id);
+  try {
+    const html = await labApi.getProtocolExcerptHTML(id);
+    // Ответ — цельный HTML-документ со своим <style>, как и у getProtocolHTML()
+    // в RequestDetail.vue — v-html только на doc.body.innerHTML, не на «сырой» html.
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    excerptCache.value.set(id, doc.body.innerHTML);
+  } catch (e: unknown) {
+    excerptCache.value.set(id, `<p>${errorMessage(e)}</p>`);
+  } finally {
+    excerptFetching.value.delete(id);
+  }
+}
+
+function onComplianceEnter(r: LabRequest): void {
+  if (r.compliance !== 'Не соответствует') return;
+  hoveredExcerptId.value = r.id;
+  void loadExcerpt(r.id);
+}
+function onComplianceLeave(): void {
+  hoveredExcerptId.value = null;
 }
 
 watch(showCreate, (v) => {
@@ -226,10 +272,10 @@ watch(showCreate, (v) => {
       <p v-if="error" class="sw-error">{{ error }}</p>
       <p v-if="loading" class="sw-loading">Загрузка…</p>
       <template v-else-if="panel === 'projects'">
-        <ProjectsPanel @changed="loadAll" />
+        <ProjectsPanel :my-email="myEmail" :is-admin="isAdmin" @changed="loadAll" @deleted="onProjectDeleted" />
       </template>
       <template v-else-if="panel === 'groups'">
-        <GroupsPanel />
+        <GroupsPanel :my-email="myEmail" :is-admin="isAdmin" @changed="loadAll" />
       </template>
       <template v-else-if="panel === 'permissions'">
         <PermissionsPanel />
@@ -276,6 +322,24 @@ watch(showCreate, (v) => {
             </div>
           </div>
           <div class="sw-req-card__meta">{{ objectName(r) }} · {{ methodName(r) }}</div>
+          <div v-if="r.result" class="sw-req-card__result">Результат: {{ r.result }}</div>
+          <div
+            v-if="r.compliance"
+            class="sw-req-card__compliance"
+            :class="{
+              'sw-req-card__compliance--ok': r.compliance === 'Соответствует',
+              'sw-req-card__compliance--bad': r.compliance === 'Не соответствует',
+            }"
+            @click.stop
+            @mouseenter="onComplianceEnter(r)"
+            @mouseleave="onComplianceLeave"
+          >
+            Соответствие: {{ r.compliance }}
+            <div v-if="r.compliance === 'Не соответствует' && hoveredExcerptId === r.id" class="sw-req-tooltip">
+              <p v-if="excerptFetching.has(r.id) && !excerptCache.has(r.id)" class="sw-hint">Загрузка…</p>
+              <div v-else-if="excerptCache.has(r.id)" class="sw-protocol-html" v-html="excerptCache.get(r.id)"></div>
+            </div>
+          </div>
         </div>
       </template>
     </section>

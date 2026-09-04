@@ -4,6 +4,14 @@ import * as labApi from '../../api/labApi';
 import { errorMessage } from '../../api/http';
 import type { LabGroup } from '../../types/requests';
 
+const props = defineProps<{
+  /** Email текущего пользователя и признак admin/superadmin — приходят из
+   *  RequestsView.vue (getMyPermission() уже вызван там), см. ProjectsPanel.vue. */
+  myEmail: string;
+  isAdmin: boolean;
+}>();
+const emit = defineEmits<{ changed: [] }>();
+
 const groups = ref<LabGroup[]>([]);
 const newGroupName = ref('');
 const newMemberEmail = ref<Record<number, string>>({});
@@ -60,6 +68,24 @@ async function removeMember(groupId: number, email: string): Promise<void> {
     busy.value = false;
   }
 }
+
+function canDelete(g: LabGroup): boolean {
+  return g.owner_email === props.myEmail || props.isAdmin;
+}
+
+async function deleteGroup(g: LabGroup): Promise<void> {
+  if (!window.confirm(`Удалить группу «${g.name}»? Действие необратимо.`)) return;
+  busy.value = true;
+  try {
+    await labApi.deleteGroup(g.id);
+    await load();
+    emit('changed');
+  } catch (e: unknown) {
+    error.value = errorMessage(e);
+  } finally {
+    busy.value = false;
+  }
+}
 </script>
 
 <template>
@@ -71,8 +97,19 @@ async function removeMember(groupId: number, email: string): Promise<void> {
       <button class="sw-btn sw-btn--primary" type="button" :disabled="busy" @click="createGroup">Создать</button>
     </div>
     <div v-for="g in groups" :key="g.id" class="sw-card" style="padding: 16px; margin-bottom: 12px">
-      <strong>{{ g.name }}</strong>
-      <span class="sw-hint"> — владелец {{ g.owner_email }}</span>
+      <div class="sw-toolbar" style="justify-content: space-between; margin-bottom: 0">
+        <div>
+          <strong>{{ g.name }}</strong>
+          <span class="sw-hint"> — владелец {{ g.owner_email }}</span>
+        </div>
+        <button
+          v-if="canDelete(g)"
+          class="sw-btn sw-btn--danger"
+          type="button"
+          :disabled="busy"
+          @click="deleteGroup(g)"
+        >🗑 Удалить</button>
+      </div>
       <table class="sw-table" style="margin-top: 8px">
         <tbody>
           <tr v-for="m in g.members" :key="m.email">

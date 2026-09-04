@@ -4,7 +4,15 @@ import * as labApi from '../../api/labApi';
 import { errorMessage } from '../../api/http';
 import type { LabGroup, LabProject } from '../../types/requests';
 
-const emit = defineEmits<{ changed: [] }>();
+const props = defineProps<{
+  /** Email текущего пользователя и признак admin/superadmin (клэмпнутый до
+   *  admin на вебе) — приходят из RequestsView.vue (getMyPermission() уже
+   *  вызван там), чтобы не дублировать запрос в каждой панели. Нужны для
+   *  клиентского гейта кнопки удаления (сервер всё равно перепроверяет 403). */
+  myEmail: string;
+  isAdmin: boolean;
+}>();
+const emit = defineEmits<{ changed: []; deleted: [id: number] }>();
 
 const projects = ref<LabProject[]>([]);
 const groups = ref<LabGroup[]>([]);
@@ -106,6 +114,26 @@ async function saveEdit(id: number): Promise<void> {
     editingId.value = null;
     await load();
     emit('changed');
+  } catch (e: unknown) {
+    error.value = errorMessage(e);
+  } finally {
+    busy.value = false;
+  }
+}
+
+function canDelete(p: LabProject): boolean {
+  return p.owner_email === props.myEmail || props.isAdmin;
+}
+
+async function deleteProject(p: LabProject): Promise<void> {
+  const label = `${p.code}${p.name ? ' — ' + p.name : ''}`;
+  if (!window.confirm(`Удалить проект «${label}»? Действие необратимо.`)) return;
+  busy.value = true;
+  try {
+    await labApi.deleteProject(p.id);
+    await load();
+    emit('changed');
+    emit('deleted', p.id);
   } catch (e: unknown) {
     error.value = errorMessage(e);
   } finally {
@@ -217,7 +245,16 @@ async function saveEdit(id: number): Promise<void> {
             <td>{{ groupName(p.group_id) }}</td>
             <td>{{ p.mail_trigger_ekn || '—' }}</td>
             <td>{{ p.mail_trigger_sender || '—' }}</td>
-            <td><button class="sw-btn" type="button" @click="startEdit(p)">✎</button></td>
+            <td>
+              <button class="sw-btn" type="button" @click="startEdit(p)">✎</button>
+              <button
+                v-if="canDelete(p)"
+                class="sw-btn sw-btn--danger"
+                type="button"
+                :disabled="busy"
+                @click="deleteProject(p)"
+              >🗑 Удалить</button>
+            </td>
           </template>
         </tr>
       </tbody>

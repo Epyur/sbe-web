@@ -115,6 +115,14 @@ export async function updateProject(
   await assertOk(res);
 }
 
+export async function deleteProject(id: number): Promise<void> {
+  const res = await apiRequest(`${API_BASE}/api/lab/projects/${id}`, {
+    method: 'DELETE',
+    headers: await authHeader(),
+  });
+  await assertOk(res);
+}
+
 export async function listObjects(): Promise<LabObject[]> {
   const data = await requestJSON<{ objects?: LabObject[] }>(`${API_BASE}/api/lab/objects`, {
     headers: await authHeader(),
@@ -190,6 +198,14 @@ export async function removeGroupMember(groupId: number, email: string): Promise
   await assertOk(res);
 }
 
+export async function deleteGroup(id: number): Promise<void> {
+  const res = await apiRequest(`${API_BASE}/api/lab/groups/${id}`, {
+    method: 'DELETE',
+    headers: await authHeader(),
+  });
+  await assertOk(res);
+}
+
 export async function listAuditLog(requestId: number): Promise<AuditLogEntry[]> {
   const data = await requestJSON<{ entries?: AuditLogEntry[] }>(
     `${API_BASE}/api/lab/requests/${requestId}/audit-log`,
@@ -200,6 +216,16 @@ export async function listAuditLog(requestId: number): Promise<AuditLogEntry[]> 
 
 export async function getProtocolHTML(requestId: number): Promise<string> {
   const res = await apiRequest(`${API_BASE}/api/lab/requests/${requestId}/protocol?template=ui&format=html`, {
+    method: 'POST',
+    headers: await authHeader(),
+  });
+  await assertOk(res);
+  const data = (await res.json()) as ProtocolResponse;
+  return data.html;
+}
+
+export async function getProtocolExcerptHTML(requestId: number): Promise<string> {
+  const res = await apiRequest(`${API_BASE}/api/lab/requests/${requestId}/protocol?template=excerpt&format=html`, {
     method: 'POST',
     headers: await authHeader(),
   });
