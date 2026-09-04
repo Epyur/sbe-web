@@ -4,13 +4,19 @@ import QRCode from 'qrcode';
 import * as labApi from '../../api/labApi';
 import { errorMessage } from '../../api/http';
 import { printQrLabels } from './qrPrint';
-import type { AuditLogEntry, Lab, LabMethod, LabObject, LabRequest } from '../../types/requests';
+import type { AuditLogEntry, Lab, LabGroup, LabMethod, LabObject, LabProject, LabRequest } from '../../types/requests';
 
 const props = defineProps<{
   requestId: number;
   labs: Lab[];
   methods: LabMethod[];
   objects: LabObject[];
+  /** Для отображения названия проекта/группы заявки (паритет с Obsidian-
+   *  плагином sbe-requests, renderRequestDetail) — переиспользуем списки,
+   *  уже загруженные в RequestsView.vue (listProjects/listGroups), отдельного
+   *  API-вызова здесь не заводим. */
+  projects: LabProject[];
+  groups: LabGroup[];
   canEdit: boolean;
   /** Только admin (или superadmin, клэмпнутый до admin на вебе) может реально
    *  менять статус — editor видит те же кнопки, но неактивные (см. AGENTS.md,
@@ -36,7 +42,25 @@ const uploading = ref(false);
 const object = computed(() => props.objects.find((o) => o.id === request.value?.object_id));
 const method = computed(() => props.methods.find((m) => m.id === request.value?.method_id));
 const lab = computed(() => props.labs.find((l) => l.id === request.value?.lab_id));
+const project = computed(() => props.projects.find((p) => p.id === request.value?.project_id));
+const group = computed(() => props.groups.find((g) => g.id === request.value?.group_id));
 const requestNumber = computed(() => request.value?.customer_number || request.value?.lab_number || '');
+
+/** Название + код метода в одну строку (паритет с methodName() плагина). */
+const methodLabel = computed(() => {
+  const m = method.value;
+  if (!m) return '';
+  return `${m.code}${m.name ? ' — ' + m.name : ''}`;
+});
+
+/** Целевой показатель, выбранный при создании заявки для её метода —
+ * characteristics.target_indicators[method_id] объекта, на котором проводится
+ * испытание (значение может отличаться для разных методов одного объекта). */
+const targetIndicator = computed(() => {
+  const methodId = request.value?.method_id;
+  if (methodId === undefined) return '';
+  return object.value?.characteristics?.target_indicators?.[String(methodId)] ?? '';
+});
 
 /** Дедлайн — день создания + 10 рабочих дней (≈14 календарных, по решению пользователя). */
 const DEADLINE_DAYS = 14;
@@ -101,7 +125,13 @@ async function loadProtocol(): Promise<void> {
   if (!request.value) return;
   protocolLoading.value = true;
   try {
-    protocolHtml.value = await labApi.getProtocolHTML(request.value.id);
+    const html = await labApi.getProtocolHTML(request.value.id);
+    // Ответ — цельный HTML-документ со своим <style> (глобальные селекторы,
+    // напр. table/td) — как и в Obsidian-плагине (renderShortView), нельзя
+    // биндить v-html на него напрямую: протекло бы в остальной DOM портала.
+    // Парсим и берём только doc.body.innerHTML, без <head>/<style>.
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    protocolHtml.value = doc.body.innerHTML;
   } catch (e: unknown) {
     error.value = errorMessage(e);
   } finally {
@@ -191,6 +221,18 @@ async function toggleAudit(): Promise<void> {
   }
 }
 
+/** Раскрытые «подробнее» (до/после) записи результата в истории — паритет
+ * с плагином (detailsBtn в renderRequestDetail). */
+const expandedAudit = ref<Set<number>>(new Set());
+function toggleAuditDetails(id: number): void {
+  if (expandedAudit.value.has(id)) expandedAudit.value.delete(id);
+  else expandedAudit.value.add(id);
+}
+function formatAuditValues(v: Record<string, unknown> | undefined): string {
+  if (!v || Object.keys(v).length === 0) return '(пусто)';
+  return Object.entries(v).map(([k, val]) => `${k}=${JSON.stringify(val)}`).join(', ');
+}
+
 function printQr(): void {
   if (!request.value) return;
   void printQrLabels([{
@@ -212,12 +254,42 @@ function formatDate(iso: string): string {
   <div>
     <p v-if="loading" class="sw-loading">Загрузка…</p>
     <template v-else-if="request">
+      <h3 v-if="object?.name">{{ object.name }}</h3>
       <h2>
-        {{ requestNumber || `#${request.id}` }}
+        {{ requestNumber || `#${request.id}` }}{{ request.external_id ? ` (${request.external_id})` : '' }}
         <span class="sw-badge" :class="`sw-badge--${request.status}`">{{ request.status }}</span>
       </h2>
-      <p class="sw-hint">{{ object?.name }} · {{ method?.name }} @ {{ lab?.name }}</p>
+      <p class="sw-hint">{{ methodLabel }} <template v-if="lab?.name">@ {{ lab.name }}</template></p>
       <p v-if="error" class="sw-error">{{ error }}</p>
+
+      <div class="sw-form-row">
+        <div class="sw-field">
+          <label>Проект</label>
+          <div>{{ project ? `${project.code}${project.name ? ' — ' + project.name : ''}` : '— Публичный —' }}</div>
+        </div>
+        <div class="sw-field">
+          <label>Группа</label>
+          <div>{{ group ? group.name : '— Без группы —' }}</div>
+        </div>
+      </div>
+      <div class="sw-form-row">
+        <div class="sw-field" v-if="request.ekn">
+          <label>ЕКН</label>
+          <div>{{ request.ekn }}</div>
+        </div>
+        <div class="sw-field" v-if="object?.characteristics?.batch_number !== undefined">
+          <label>Номер партии</label>
+          <div>{{ object?.characteristics?.batch_number }}</div>
+        </div>
+        <div class="sw-field" v-if="object?.characteristics?.sample_id">
+          <label>Идентификатор образца</label>
+          <div>{{ object?.characteristics?.sample_id }}</div>
+        </div>
+      </div>
+      <div class="sw-field">
+        <label>Заказчик</label>
+        <div>{{ request.owner_email || '—' }}</div>
+      </div>
 
       <div class="sw-field">
         <label>Название</label>
@@ -283,11 +355,23 @@ function formatDate(iso: string): string {
         <button class="sw-btn" :class="{ 'sw-btn--status-current': request.status === 'completed' }" type="button" :disabled="!canChangeStatus || saving || request.status === 'completed'" @click="setStatus('completed')">Завершена</button>
       </div>
 
+      <div class="sw-section-title">Метод испытаний</div>
+      <p class="sw-hint">{{ methodLabel || '—' }}</p>
+      <table class="sw-table">
+        <thead>
+          <tr><th>Номер заказчику</th><th>Номер лаборатории</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>{{ request.customer_number || '—' }}</td><td>{{ request.lab_number || '—' }}</td></tr>
+        </tbody>
+      </table>
+      <p v-if="targetIndicator" class="sw-hint" style="margin-top: 8px">🎯 Целевой показатель: {{ targetIndicator }}</p>
+
       <div class="sw-section-title">Результаты</div>
       <button class="sw-btn" type="button" :disabled="protocolLoading" @click="loadProtocol">
         {{ protocolHtml ? 'Обновить' : 'Показать результаты' }}
       </button>
-      <div v-if="protocolHtml" v-html="protocolHtml" style="margin-top: 12px" />
+      <div v-if="protocolHtml" class="sw-protocol-html" v-html="protocolHtml" style="margin-top: 12px" />
       <div class="sw-toolbar" style="margin-top: 12px">
         <button class="sw-btn" type="button" @click="downloadProtocolDocx">📄 Скачать протокол (Word)</button>
         <button class="sw-btn" type="button" @click="downloadExportXlsx">📊 Скачать таблицу (Excel)</button>
@@ -317,7 +401,16 @@ function formatDate(iso: string): string {
           <span class="sw-comment__author">{{ e.who }}</span>
           <span class="sw-comment__date">{{ formatDate(e.created_at) }}</span>
           <div v-if="e.kind === 'status'">Статус: {{ e.old_status }} → {{ e.new_status }}</div>
-          <div v-else>Результат: серия {{ e.series_num }} ({{ e.kind === 'result_created' ? 'создана' : 'изменена' }})</div>
+          <template v-else>
+            <div>
+              Результат: серия {{ e.series_num }} ({{ e.kind === 'result_created' ? 'создана' : 'изменена' }})
+              <button class="sw-btn sw-btn--ghost" type="button" @click="toggleAuditDetails(e.id)">подробнее</button>
+            </div>
+            <div v-if="expandedAudit.has(e.id)" class="sw-hint">
+              <div>До: {{ formatAuditValues(e.values_before) }}</div>
+              <div>После: {{ formatAuditValues(e.values_after) }}</div>
+            </div>
+          </template>
         </div>
       </div>
     </template>

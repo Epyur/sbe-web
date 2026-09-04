@@ -7,10 +7,11 @@ import { useCollapsed } from '../../composables/useCollapsed';
 import { viewAsState } from '../../store/viewAs';
 import ViewAsRoleSwitcher from '../../components/ViewAsRoleSwitcher.vue';
 import { printQrLabels } from './qrPrint';
-import type { Lab, LabMethod, LabObject, LabProject, LabRequest } from '../../types/requests';
+import type { Lab, LabGroup, LabMethod, LabObject, LabProject, LabRequest } from '../../types/requests';
 import ProjectTree, { type ProjectNode } from './ProjectTree.vue';
 import RequestDetail from './RequestDetail.vue';
 import RequestCreateModal from './RequestCreateModal.vue';
+import RequestFilters, { emptyRequestFilters, type RequestFiltersState } from './RequestFilters.vue';
 import GroupsPanel from './GroupsPanel.vue';
 import PermissionsPanel from './PermissionsPanel.vue';
 import ProjectsPanel from './ProjectsPanel.vue';
@@ -24,6 +25,7 @@ const router = useRouter();
 
 const requests = ref<LabRequest[]>([]);
 const projects = ref<LabProject[]>([]);
+const groups = ref<LabGroup[]>([]);
 const labs = ref<Lab[]>([]);
 const methods = ref<LabMethod[]>([]);
 const objects = ref<LabObject[]>([]);
@@ -35,6 +37,7 @@ const panel = ref<SidePanel>('requests');
 const activeProjectId = ref<number | null>(null);
 const showCreate = ref(false);
 const selectedForPrint = ref<Set<number>>(new Set());
+const filters = ref<RequestFiltersState>(emptyRequestFilters());
 
 const canEdit = computed(() => role.value === 'editor' || role.value === 'admin');
 const isAdmin = computed(() => role.value === 'admin');
@@ -56,10 +59,52 @@ const projectTree = computed<ProjectNode[]>(() => {
   return roots;
 });
 
+/** Список заявок с применёнными фильтрами (2026-09-04) — activeProjectId
+ * (сайдбар) AND 6 полей панели фильтров (RequestFilters.vue), все условия
+ * через AND, пустое поле не ограничивает. Полностью на клиенте — сервер
+ * /api/lab/requests query-параметров не читает. */
 const filteredRequests = computed(() => {
-  const list = activeProjectId.value === null
+  let list = activeProjectId.value === null
     ? requests.value
     : requests.value.filter((r) => r.project_id === activeProjectId.value);
+
+  const f = filters.value;
+  if (f.dateFrom) {
+    const from = new Date(f.dateFrom).getTime();
+    list = list.filter((r) => new Date(r.created_at).getTime() >= from);
+  }
+  if (f.dateTo) {
+    // «До» включительно — конец указанного дня.
+    const to = new Date(f.dateTo).getTime() + 24 * 60 * 60 * 1000 - 1;
+    list = list.filter((r) => new Date(r.created_at).getTime() <= to);
+  }
+  if (f.methodId) {
+    list = list.filter((r) => r.method_id === f.methodId);
+  }
+  if (f.objectName.trim()) {
+    const q = f.objectName.trim().toLowerCase();
+    list = list.filter((r) => objectName(r).toLowerCase().includes(q));
+  }
+  if (f.identifier.trim()) {
+    const q = f.identifier.trim().toLowerCase();
+    list = list.filter((r) =>
+      r.customer_number.toLowerCase().includes(q)
+      || r.lab_number.toLowerCase().includes(q)
+      || r.external_id.toLowerCase().includes(q)
+      || String(r.id).includes(q));
+  }
+  if (f.batch.trim()) {
+    const q = f.batch.trim().toLowerCase();
+    list = list.filter((r) => {
+      const batch = objects.value.find((o) => o.id === r.object_id)?.characteristics?.batch_number;
+      return batch !== undefined && String(batch).toLowerCase().includes(q);
+    });
+  }
+  if (f.ownerEmail.trim()) {
+    const q = f.ownerEmail.trim().toLowerCase();
+    list = list.filter((r) => r.owner_email.toLowerCase().includes(q));
+  }
+
   // Сначала новые: по дате создания (не по номеру — номер зависит от года/лабы
   // и не всегда монотонно совпадает с реальным порядком создания).
   return [...list].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
@@ -91,10 +136,11 @@ async function loadAll(): Promise<void> {
   loading.value = true;
   error.value = '';
   try {
-    const [perm, reqs, projs, l, m, o] = await Promise.all([
+    const [perm, reqs, projs, grps, l, m, o] = await Promise.all([
       labApi.getMyPermission(),
       labApi.listRequests(),
       labApi.listProjects(),
+      labApi.listGroups(),
       labApi.listLabs(),
       labApi.listMethods(),
       labApi.listObjects(),
@@ -103,6 +149,7 @@ async function loadAll(): Promise<void> {
     realRole.value = perm.real_role;
     requests.value = reqs;
     projects.value = projs;
+    groups.value = grps;
     labs.value = l;
     methods.value = m;
     objects.value = o;
@@ -194,6 +241,8 @@ watch(showCreate, (v) => {
           :labs="labs"
           :methods="methods"
           :objects="objects"
+          :projects="projects"
+          :groups="groups"
           :can-edit="canEdit"
           :can-change-status="isAdmin"
           @updated="loadAll"
@@ -210,6 +259,7 @@ watch(showCreate, (v) => {
           </button>
           <button class="sw-btn sw-btn--ghost" type="button" @click="clearSelectForPrint">✖ Снять выбор</button>
         </div>
+        <RequestFilters :methods="methods" @change="filters = $event" />
         <p v-if="!filteredRequests.length" class="sw-empty">Заявок нет.</p>
         <div v-for="r in filteredRequests" :key="r.id" class="sw-card sw-req-card" @click="openRequest(r.id)">
           <div style="display: flex; align-items: center; gap: 8px">
@@ -221,7 +271,7 @@ watch(showCreate, (v) => {
               @change="toggleSelectForPrint(r.id, ($event.target as HTMLInputElement).checked)"
             />
             <div class="sw-req-card__number">
-              {{ requestNumber(r) }}
+              {{ requestNumber(r) }}{{ r.external_id ? ` (${r.external_id})` : '' }}
               <span class="sw-badge" :class="`sw-badge--${r.status}`">{{ r.status }}</span>
             </div>
           </div>

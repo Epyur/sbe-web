@@ -502,3 +502,43 @@ a:hover {
   padding: 20px;
   text-align: center;
 }
+
+.sw-filters {
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.sw-filters__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.sw-filters__date-range {
+  display: flex;
+  gap: 8px;
+}
+
+/* ---------- Краткий вид результатов испытания (HTML с сервера, вставлен как
+   innerHTML) ---------- Ответ getProtocolHTML() — цельный HTML-документ со
+   своим <style> (глобальные селекторы напр. table/td) — v-html на нём напрямую
+   протёк бы в остальной DOM портала, поэтому в RequestDetail.vue биндится
+   только doc.body.innerHTML (DOMParser), без <head>. Этот класс зеркалит
+   border/padding таблиц результатов из серверного protocol.go — как и
+   .tn-protocol-html в sbe-core у Obsidian-плагинов. */
+.sw-protocol-html table {
+  border-collapse: collapse;
+  margin: 8px 0;
+}
+
+.sw-protocol-html td, .sw-protocol-html th {
+  border: 1px solid #999;
+  padding: 4px 8px;
+  font-size: 13px;
+  text-align: center;
+}
+
+.sw-protocol-html th {
+  background: var(--sw-bg);
+}
