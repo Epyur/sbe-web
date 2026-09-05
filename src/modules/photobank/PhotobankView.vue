@@ -137,20 +137,63 @@ watch(activeFolderId, () => {
   if (specialView.value === 'all') void loadPhotos();
 });
 
-onMounted(() => {
-  void loadPermission();
-  void loadFolders();
-  void loadPhotos();
-});
-
-onUnmounted(() => {
-  window.clearTimeout(searchTimer);
-});
-
 const thumbCache = reactive(new Map<number, string>());
 function openPhoto(p: PhotoItem): void {
   selected.value = p;
 }
+
+// Ленивая загрузка превью «в видимой области + следующие 10» (2026-09-05) —
+// один IntersectionObserver на весь грид; как только карточка с индексом i
+// попадает в видимость, разрешаем загрузку карточкам с индексом < i+1+LOOKAHEAD
+// (по порядку в списке, не по пикселям — точнее соответствует «10 фото», а не
+// «N пикселей», при разном числе колонок в гриде). loadUpTo только растёт,
+// пока не сменится список фото (новая папка/поиск — сброс).
+const LOOKAHEAD = 10;
+const loadUpTo = ref(LOOKAHEAD);
+let observer: IntersectionObserver | undefined;
+const elByIndex = new Map<number, Element>();
+const indexByEl = new Map<Element, number>();
+
+function setCardRef(el: Element | null, index: number): void {
+  const prev = elByIndex.get(index);
+  if (prev && prev !== el) {
+    observer?.unobserve(prev);
+    indexByEl.delete(prev);
+  }
+  if (el) {
+    elByIndex.set(index, el);
+    indexByEl.set(el, index);
+    observer?.observe(el);
+  } else {
+    elByIndex.delete(index);
+  }
+}
+
+watch(photos, () => {
+  loadUpTo.value = LOOKAHEAD;
+});
+
+onMounted(() => {
+  void loadPermission();
+  void loadFolders();
+  void loadPhotos();
+  observer = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const index = indexByEl.get(entry.target);
+      if (index === undefined) continue;
+      const candidate = index + 1 + LOOKAHEAD;
+      if (candidate > loadUpTo.value) loadUpTo.value = candidate;
+    }
+  }, { rootMargin: '100px 0px' });
+  for (const el of elByIndex.values()) observer.observe(el);
+});
+
+onUnmounted(() => {
+  window.clearTimeout(searchTimer);
+  observer?.disconnect();
+});
+
 </script>
 
 <template>
@@ -217,8 +260,14 @@ function openPhoto(p: PhotoItem): void {
       <p v-if="loading" class="sw-loading">Загрузка…</p>
       <p v-else-if="!photos.length" class="sw-empty">Ничего не найдено.</p>
       <div v-else class="sw-grid">
-        <div v-for="p in photos" :key="p.id" class="sw-card sw-photo-card" @click="openPhoto(p)">
-          <PhotoThumb :photo="p" :cache="thumbCache" />
+        <div
+          v-for="(p, i) in photos"
+          :key="p.id"
+          class="sw-card sw-photo-card"
+          :ref="(el) => setCardRef(el as Element | null, i)"
+          @click="openPhoto(p)"
+        >
+          <PhotoThumb :photo="p" :cache="thumbCache" :should-load="i < loadUpTo" />
           <div class="sw-photo-card__body">
             <div class="sw-photo-card__title">{{ p.title || p.file_name }}</div>
             <div class="sw-photo-card__meta">

@@ -64,17 +64,22 @@ export async function viewPhoto(id: number): Promise<void> {
   await assertOk(res);
 }
 
-/** Скачивает файл (оригинал или превью) и возвращает blob-URL — `<img src>`/скачивание
- * не могут сами приложить заголовок Authorization, поэтому грузим через fetch. */
-export async function fetchFileBlobUrl(fileKey: string, view: boolean): Promise<string> {
+/** Скачивает файл (оригинал или превью) — `<img src>`/скачивание не могут сами
+ * приложить заголовок Authorization, поэтому грузим через fetch. Возвращает
+ * сырой Blob (не blob-URL) — нужен для персистентного кэша превью
+ * (photoThumbCache.ts), объект-URL из него делает уже вызывающий код. */
+export async function fetchFileBlob(fileKey: string, view: boolean): Promise<Blob> {
   const qs = view ? `?key=${encodeURIComponent(fileKey)}&view=1` : `?key=${encodeURIComponent(fileKey)}`;
   const res = await apiRequest(`${API_BASE}/api/photo/file${qs}`, {
     headers: await authHeader(),
     timeoutMs: 120000,
   });
   await assertOk(res);
-  const blob = await res.blob();
-  return URL.createObjectURL(blob);
+  return res.blob();
+}
+
+export async function fetchFileBlobUrl(fileKey: string, view: boolean): Promise<string> {
+  return URL.createObjectURL(await fetchFileBlob(fileKey, view));
 }
 
 export async function listComments(photoId: number): Promise<PhotoComment[]> {
