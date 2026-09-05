@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, nextTick } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import * as agentApi from '../../api/agentApi';
 import * as llmApi from '../../api/llmApi';
@@ -45,6 +45,23 @@ const attachedFile = ref<File | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
 const sending = ref(false);
 const progressStatus = ref('');
+const activeEngine = ref<AgentEngine | null>(null);
+
+/** Esc останавливает текущий цикл агента (например, если он «зациклился» на
+ * повторной генерации почти одинакового результата) — жалоба пользователя:
+ * агент несколько раз подряд перегенерировал один и тот же файл, и единственный
+ * способ прервать было закрыть вкладку. */
+function stopAgent(): void {
+  if (!sending.value) return;
+  activeEngine.value?.stop();
+  progressStatus.value = 'Останавливаю…';
+}
+
+function onGlobalKeydown(e: KeyboardEvent): void {
+  if (e.key === 'Escape' && sending.value) stopAgent();
+}
+onMounted(() => window.addEventListener('keydown', onGlobalKeydown));
+onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown));
 
 const messagesEl = ref<HTMLElement | null>(null);
 
@@ -200,6 +217,7 @@ async function sendMessage(): Promise<void> {
   progressStatus.value = 'Агент думает…';
 
   const engine = new AgentEngine(createTools(), buildContext());
+  activeEngine.value = engine;
   const currentDialog = dialog;
   try {
     await engine.run({
@@ -223,6 +241,7 @@ async function sendMessage(): Promise<void> {
   } finally {
     sending.value = false;
     progressStatus.value = '';
+    activeEngine.value = null;
   }
 }
 
@@ -411,7 +430,10 @@ watch(() => activeDialog.value?.messages.length, scrollToBottom);
               </a>
             </div>
           </template>
-          <p v-if="sending" class="sw-hint">{{ progressStatus }}</p>
+          <p v-if="sending" class="sw-hint">
+            {{ progressStatus }}
+            <button class="sw-btn sw-btn--ghost" type="button" style="margin-left: 8px" @click="stopAgent">⏹ Стоп (Esc)</button>
+          </p>
         </div>
 
         <div class="sw-agent-input">

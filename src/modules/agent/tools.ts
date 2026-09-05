@@ -895,20 +895,33 @@ export function createTools(): AgentTool[] {
     {
       schema: {
         name: 'create_mermaid',
-        description: 'Сформировать mermaid-диаграмму: PNG + SVG + .mmd исходник. Возвращаются ссылки на скачивание.',
-        input_schema: { type: 'object', properties: { title: { type: 'string' }, code: { type: 'string', description: 'Mermaid-код (graph TD/flowchart/sequenceDiagram/pie/xychart-beta и т.п.)' } }, required: ['title', 'code'] },
+        description: 'Сформировать ПРОИЗВОЛЬНУЮ mermaid-диаграмму (graph TD/flowchart/sequenceDiagram и т.п. — не про числовые данные) по коду, который ты сам пишешь: PNG + SVG + .mmd исходник. НЕ используй для обычного графика по числам/датам (bar/line/pie, в т.ч. несколько рядов вроде «поступление/завершение») — для этого возьми create_png с chart, там нельзя написать невалидный синтаксис (код собирает сервер), а здесь можно, и ты уже так однажды ошибался (несуществующий оператор legend в xychart-beta).',
+        input_schema: { type: 'object', properties: { title: { type: 'string' }, code: { type: 'string', description: 'Mermaid-код (graph TD/flowchart/sequenceDiagram и т.п.)' } }, required: ['title', 'code'] },
       },
       execute: async (_ctx, args) => (!args.title || !args.code) ? { ok: false, summary: '', error: 'Требуются поля title и code.' } : generateFileTool('mermaid', args, 'Mermaid (PNG)'),
     },
     {
       schema: {
         name: 'create_png',
-        description: 'Сгенерировать PNG: график из данных (chart: bar/line/pie) ИЛИ диаграмма по mermaid-коду (mermaid). Возвращается ссылка на скачивание PNG.',
+        description: 'Сгенерировать PNG-график из данных — сервер сам собирает корректный mermaid-код, ты просто передаёшь числа (никогда не пишешь mermaid-синтаксис вручную, поэтому здесь невозможна ошибка вида несуществующего оператора). Два варианта chart: (1) один ряд — {type, title, data:[{label,value}]}; (2) НЕСКОЛЬКО рядов на общих категориях (например «поступление»/«завершение» по одним и тем же датам, как в data.series из get_lims_requests с group_by) — {title, categories:[подписи оси X], series:[{name, type:"bar"|"line", values:[числа]}]}. Категории — это ровно то, что должно быть подписью оси X: если пользователь просит «только день, без месяца» — передай в categories уже укороченные подписи («01», «02», …), а не полную дату. Есть встроенная защита от бесконечного перегенерирования почти одинакового графика — если требуется всего лишь другая подпись оси X, это одна правка массива categories, не повод вызывать тул больше 2 раз с разным text/заголовком. Возвращается ссылка на скачивание PNG.',
         input_schema: {
           type: 'object',
           properties: {
-            chart: { type: 'object', properties: { type: { type: 'string', enum: ['bar', 'line', 'pie'] }, title: { type: 'string' }, data: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, value: { type: 'number' } } } } } },
-            mermaid: { type: 'string' },
+            chart: {
+              type: 'object',
+              properties: {
+                type: { type: 'string', enum: ['bar', 'line', 'pie'], description: 'Для одного ряда (data) или тип по умолчанию для рядов series, у которых не задан свой type' },
+                title: { type: 'string' },
+                data: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, value: { type: 'number' } } }, description: 'Один ряд: массив {label, value}' },
+                categories: { type: 'array', items: { type: 'string' }, description: 'Подписи оси X для нескольких рядов (см. series) — ровно то, что должно отображаться на графике' },
+                series: {
+                  type: 'array',
+                  items: { type: 'object', properties: { name: { type: 'string' }, type: { type: 'string', enum: ['bar', 'line'] }, values: { type: 'array', items: { type: 'number' } } }, required: ['values'] },
+                  description: 'Несколько рядов на общих categories, каждый со своими values той же длины что categories',
+                },
+              },
+            },
+            mermaid: { type: 'string', description: 'Диаграмма по готовому mermaid-коду вместо chart — только если код уже есть (например, из create_mermaid), не для написания графика с нуля' },
           },
         },
       },

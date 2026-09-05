@@ -1,5 +1,5 @@
 import { API_BASE } from '../config';
-import { requestJSON, apiRequest, assertOk } from './http';
+import { requestJSON, apiRequest, assertOk, AbortedByUserError } from './http';
 import { getToken } from './authApi';
 import type { LlmModel } from '../types/agent';
 
@@ -64,18 +64,33 @@ interface LLMResponse {
 let lastRequestTime = 0;
 const MIN_REQUEST_INTERVAL_MS = 2000;
 
-async function retryWithBackoff<T>(fn: () => Promise<T>, maxRetries = 3, baseDelay = 3000): Promise<T> {
+/** Сон, который завершается досрочно (реджектом AbortedByUserError), если
+ * signal отменяется во время ожидания — иначе Esc пришлось бы ждать полную
+ * задержку между ретраями (до нескольких секунд) прежде чем агент остановится. */
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new AbortedByUserError());
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => { cleanup(); resolve(); }, ms);
+    const onAbort = () => { cleanup(); reject(new AbortedByUserError()); };
+    const cleanup = () => { window.clearTimeout(timer); signal?.removeEventListener('abort', onAbort); };
+    signal?.addEventListener('abort', onAbort);
+  });
+}
+
+async function retryWithBackoff<T>(fn: () => Promise<T>, maxRetries = 3, baseDelay = 3000, signal?: AbortSignal): Promise<T> {
   let lastError: Error | null = null;
   for (let attempt = 0; attempt < maxRetries; attempt++) {
+    if (signal?.aborted) throw new AbortedByUserError();
     try {
       const now = Date.now();
       const sinceLast = now - lastRequestTime;
       if (sinceLast < MIN_REQUEST_INTERVAL_MS) {
-        await new Promise(resolve => window.setTimeout(resolve, MIN_REQUEST_INTERVAL_MS - sinceLast));
+        await abortableSleep(MIN_REQUEST_INTERVAL_MS - sinceLast, signal);
       }
       lastRequestTime = Date.now();
       return await fn();
     } catch (e: unknown) {
+      if (e instanceof AbortedByUserError) throw e;
       lastError = e instanceof Error ? e : new Error(String(e));
       const err = e as { message?: string; status?: number };
       // status===0 — сетевая ошибка/наш собственный таймаут (см. apiRequest в http.ts,
@@ -85,7 +100,7 @@ async function retryWithBackoff<T>(fn: () => Promise<T>, maxRetries = 3, baseDel
       if (retryable) {
         const delay = baseDelay * Math.pow(2, attempt);
         console.warn(`[sbe-web LLM] попытка ${attempt + 1} вернула ${err.message}, повтор через ${delay}ms...`);
-        await new Promise(resolve => window.setTimeout(resolve, delay));
+        await abortableSleep(delay, signal);
         continue;
       }
       throw e;
@@ -98,23 +113,27 @@ async function retryWithBackoff<T>(fn: () => Promise<T>, maxRetries = 3, baseDel
  * ({model?, messages, temperature}), llm-service пересылает его как есть.
  * Таймаут 180с (не дефолтные 30с) — как в Obsidian-версии, LLM-ответ с
  * большим транскриптом/списком тулов может идти дольше 30 секунд. */
-async function chatCompletion(payload: Record<string, unknown>): Promise<string> {
+async function chatCompletion(payload: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
   return retryWithBackoff(async () => {
     const data = await requestJSON<LLMResponse>(`${API_BASE}/api/llm/chat/completions`, {
       method: 'POST',
       headers: { ...(await authHeader()), 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
       timeoutMs: 180000,
+      signal,
     });
     return data.choices?.[0]?.message?.content || '';
-  });
+  }, 3, 3000, signal);
 }
 
-/** Порт SbeLlmApi.complete — используется циклом агента (modules/agent/agentEngine.ts). */
+/** Порт SbeLlmApi.complete — используется циклом агента (modules/agent/agentEngine.ts).
+ * signal — отмена всего запроса (включая ретраи/паузу между ними) при остановке
+ * агента пользователем (Esc/кнопка «Стоп»), см. AbortedByUserError в http.ts. */
 export async function complete(
   system: string,
   user: string,
   opts?: { model?: string; temperature?: number },
+  signal?: AbortSignal,
 ): Promise<string> {
   const model = opts?.model?.trim() || '';
   return chatCompletion({
@@ -124,7 +143,7 @@ export async function complete(
       { role: 'user', content: user },
     ],
     temperature: opts?.temperature ?? 0.4,
-  });
+  }, signal);
 }
 
 function extractJsonBlock(text: string): unknown {

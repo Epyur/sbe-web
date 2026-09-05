@@ -21,12 +21,30 @@ export interface RequestOptions {
   headers?: Record<string, string>;
   body?: BodyInit;
   timeoutMs?: number;
+  /** Внешняя отмена (например, кнопка/Esc «Остановить агента») — независима от
+   * внутреннего таймаута ниже, обе причины ведут к одному и тому же abort(). */
+  signal?: AbortSignal;
+}
+
+/** Брошено, если запрос отменён через opts.signal (не по таймауту) — отличать
+ * от обычного "сервер не ответил", чтобы показать пользователю осмысленный
+ * текст («Остановлено пользователем»), а не сетевую ошибку. */
+export class AbortedByUserError extends Error {
+  constructor() {
+    super('Остановлено пользователем');
+  }
 }
 
 /** Низкоуровневый запрос с таймаутом и единой обработкой 401/403. */
 export async function apiRequest(url: string, opts: RequestOptions = {}): Promise<Response> {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), opts.timeoutMs ?? 30000);
+  const external = opts.signal;
+  const onExternalAbort = () => controller.abort();
+  if (external) {
+    if (external.aborted) controller.abort();
+    else external.addEventListener('abort', onExternalAbort);
+  }
   let res: Response;
   try {
     res = await fetch(url, {
@@ -36,9 +54,11 @@ export async function apiRequest(url: string, opts: RequestOptions = {}): Promis
       signal: controller.signal,
     });
   } catch (e: unknown) {
+    if (external?.aborted) throw new AbortedByUserError();
     throw new ApiError(0, `Сервер не ответил: ${errorMessage(e)}`);
   } finally {
     window.clearTimeout(timer);
+    if (external) external.removeEventListener('abort', onExternalAbort);
   }
   return res;
 }

@@ -4,7 +4,7 @@ import { loadAllRules } from './tools';
 import { SYSTEM_PROMPT_TEMPLATE, renderSystemPrompt } from './systemPrompt';
 import * as agentApi from '../../api/agentApi';
 import * as llmApi from '../../api/llmApi';
-import { errorMessage } from '../../api/http';
+import { errorMessage, AbortedByUserError } from '../../api/http';
 
 /**
  * Порт sbe-agent/src/agent/agent-engine.ts. Отличия от Obsidian-версии:
@@ -37,11 +37,19 @@ export class AgentEngine {
   private ctx: AgentToolContext;
   private maxIterations: number;
   private rulesBlock: string | null = null;
+  private abortController: AbortController | null = null;
 
   constructor(tools: AgentTool[], ctx: AgentToolContext, maxIterations = DEFAULT_MAX_ITERATIONS) {
     this.tools = tools;
     this.ctx = ctx;
     this.maxIterations = maxIterations;
+  }
+
+  /** Остановить текущий run() (например, по Esc/кнопке «Стоп») — прерывает
+   * запрос к LLM в процессе (включая ожидание между ретраями) и не даёт начать
+   * следующую итерацию цикла. Безопасно вызывать и когда run() не выполняется. */
+  stop(): void {
+    this.abortController?.abort();
   }
 
   private async buildSystemPrompt(): Promise<string> {
@@ -88,22 +96,36 @@ export class AgentEngine {
   }
 
   async run(params: RunAgentParams): Promise<void> {
+    const controller = new AbortController();
+    this.abortController = controller;
     const system = await this.buildSystemPrompt();
     let transcript = this.serializeHistory(params.dialog);
     const seenCalls = new Map<string, number>();
 
     for (let i = 0; i < this.maxIterations; i++) {
+      if (controller.signal.aborted) {
+        params.onAssistant('Остановлено пользователем.');
+        return;
+      }
       params.onProgress('Агент думает…');
       let turns: LlmTurn[];
       try {
-        const raw = await llmApi.complete(system, transcript, params.model ? { model: params.model } : undefined);
+        const raw = await llmApi.complete(system, transcript, params.model ? { model: params.model } : undefined, controller.signal);
         turns = this.parseTurns(raw);
       } catch (e: unknown) {
+        if (e instanceof AbortedByUserError) {
+          params.onAssistant('Остановлено пользователем.');
+          return;
+        }
         params.onAssistant(`Ошибка обращения к LLM: ${errorMessage(e)}`);
         return;
       }
 
       for (const turn of turns) {
+        if (controller.signal.aborted) {
+          params.onAssistant('Остановлено пользователем.');
+          return;
+        }
         if (turn.type === 'final') {
           params.onAssistant(turn.text || 'Готово.');
           return;
