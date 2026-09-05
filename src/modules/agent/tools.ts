@@ -268,6 +268,17 @@ function inRange(dateStr: unknown, from: string, to: string): boolean {
   return true;
 }
 
+/** Начало периода (день/неделя-с-понедельника/месяц) для даты, уже прошедшей inRange. */
+function bucketKey(dateStr: unknown, granularity: 'day' | 'week' | 'month'): string {
+  const d = dateOnly(dateStr);
+  if (granularity === 'day') return d;
+  if (granularity === 'month') return d.slice(0, 7);
+  const dt = new Date(`${d}T00:00:00Z`);
+  const isoDow = dt.getUTCDay() || 7; // Пн=1..Вс=7
+  dt.setUTCDate(dt.getUTCDate() - isoDow + 1);
+  return dt.toISOString().slice(0, 10);
+}
+
 async function getLimsRequestsTool(args: Record<string, unknown>): Promise<ToolCallResult> {
   try {
     const status = String(args.status || '').trim();
@@ -275,6 +286,7 @@ async function getLimsRequestsTool(args: Record<string, unknown>): Promise<ToolC
     const labQuery = String(args.lab || '').trim();
     const dateFrom = dateOnly(args.date_from);
     const dateTo = dateOnly(args.date_to);
+    const groupBy = String(args.group_by || '').trim();
     const limit = Number(args.limit) || 20;
     let items = await agentApi.getLimsRequests();
 
@@ -296,12 +308,34 @@ async function getLimsRequestsTool(args: Record<string, unknown>): Promise<ToolC
     if (dateFrom || dateTo) {
       items = items.filter(i => inRange(i.created_at, dateFrom, dateTo) || inRange(i.completed_at, dateFrom, dateTo));
     }
+    const dateNote = (dateFrom || dateTo) ? `, период: ${dateFrom || '…'}..${dateTo || '…'} (по дате регистрации ИЛИ завершения)` : '';
+
+    if (groupBy === 'day' || groupBy === 'week' || groupBy === 'month') {
+      const buckets = new Map<string, { period: string; arrived: number; completed: number }>();
+      const bump = (dateStr: unknown, field: 'arrived' | 'completed') => {
+        if (!inRange(dateStr, dateFrom, dateTo)) return;
+        const key = bucketKey(dateStr, groupBy);
+        const entry = buckets.get(key) || { period: key, arrived: 0, completed: 0 };
+        entry[field]++;
+        buckets.set(key, entry);
+      };
+      for (const i of items) {
+        bump(i.created_at, 'arrived');
+        bump(i.completed_at, 'completed');
+      }
+      const series = [...buckets.values()].sort((a, b) => a.period.localeCompare(b.period));
+      return {
+        ok: true,
+        summary: `Заявки ЛИМС, счёт по ${groupBy} (источник: server${labNote}${dateNote}): заявок в выборке ${items.length}, периодов в графике ${series.length}. Уже посчитано — НЕ пересчитывай вручную по отдельным заявкам, бери data.series как готовые точки графика (period — подпись оси X, arrived — поступление, completed — завершение).`,
+        data: { source: 'server', total: items.length, series },
+      };
+    }
+
     const picked = limitItems(items, limit).map(i => ({
       id: i.id, title: i.title, customer_number: i.customer_number, lab_number: i.lab_number,
       status: i.status, result: i.result, compliance: i.compliance, owner_email: i.owner_email,
       created_at: i.created_at, updated_at: i.updated_at, completed_at: i.completed_at,
     }));
-    const dateNote = (dateFrom || dateTo) ? `, период: ${dateFrom || '…'}..${dateTo || '…'} (по дате регистрации ИЛИ завершения)` : '';
     return {
       ok: true,
       summary: `Заявки ЛИМС (источник: server${labNote}${dateNote}): найдено ${items.length}, показано ${picked.length}.`,
@@ -800,7 +834,7 @@ export function createTools(): AgentTool[] {
     {
       schema: {
         name: 'get_lims_requests',
-        description: 'Заявки на испытания из ЛИМС (доступен, если у пользователя есть права на плагин «Заявки на испытания»/«ЛИМС»). Возвращает title, result (итоговый результат испытания), compliance (вердикт: «Соответствует»/«Не соответствует»/«Не оценивается», пусто — не посчитан), статус, номера, created_at (дата регистрации/поступления), completed_at (дата завершения). ВСЕГДА фильтруй по lab/date_from/date_to, если пользователь называет лабораторию или период (например, для графика поступления/завершения заявок за месяц в конкретной лаборатории) — НЕ выгружай все заявки без фильтра ради подсчёта вручную, это может достигать сотен записей и не поместится в контекст. Аналогично фильтруй по compliance, чтобы найти заявки с конкретным вердиктом.',
+        description: 'Заявки на испытания из ЛИМС (доступен, если у пользователя есть права на плагин «Заявки на испытания»/«ЛИМС»). Возвращает title, result (итоговый результат испытания), compliance (вердикт: «Соответствует»/«Не соответствует»/«Не оценивается», пусто — не посчитан), статус, номера, created_at (дата регистрации/поступления), completed_at (дата завершения). ВСЕГДА фильтруй по lab/date_from/date_to, если пользователь называет лабораторию или период — НЕ выгружай все заявки без фильтра ради подсчёта вручную, это может достигать сотен записей и не поместится в контекст. Для ГРАФИКА/СТАТИСТИКИ поступления-завершения по датам ОБЯЗАТЕЛЬНО передавай group_by (day/week/month) ОДНИМ вызовом на весь период — тул сам посчитает количество по датам и вернёт готовые точки в data.series; НЕ дели период на части и НЕ пытайся посчитать вручную по сырым записям — это и есть причина таймаутов на больших выборках. Аналогично фильтруй по compliance, чтобы найти заявки с конкретным вердиктом.',
         input_schema: {
           type: 'object',
           properties: {
@@ -809,7 +843,8 @@ export function createTools(): AgentTool[] {
             lab: { type: 'string', description: 'Название или код лаборатории (частичное совпадение, например «пожарных»)' },
             date_from: { type: 'string', description: 'Начало периода, YYYY-MM-DD. Заявка проходит, если в диапазон попадает дата регистрации ИЛИ дата завершения' },
             date_to: { type: 'string', description: 'Конец периода, YYYY-MM-DD' },
-            limit: { type: 'number', description: 'По умолчанию 20, максимум 200 (после фильтров status/compliance/lab/date_from/date_to)' },
+            group_by: { type: 'string', enum: ['day', 'week', 'month'], description: 'Для графика/статистики по датам: вернуть НЕ список заявок, а готовые счётчики поступления/завершения по периодам (data.series: [{period, arrived, completed}]). Всегда используй это вместо ручного подсчёта.' },
+            limit: { type: 'number', description: 'По умолчанию 20, максимум 200 (после фильтров status/compliance/lab/date_from/date_to; игнорируется при group_by)' },
           },
         },
       },
