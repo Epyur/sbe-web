@@ -1,6 +1,7 @@
 import type { AgentToolSchema, ToolCallResult, SourceAvailability, FileGenerateResponse, FileParseResponse } from '../../types/agent';
 import { errorMessage } from '../../api/http';
 import * as agentApi from '../../api/agentApi';
+import { API_MANIFEST } from './apiManifest';
 
 /**
  * Реестр тулов веб-агента — порт sbe-agent/src/agent/tools-registry.ts + tools/*.ts.
@@ -253,20 +254,59 @@ async function getContactsTool(args: Record<string, unknown>): Promise<ToolCallR
   }
 }
 
+/** YYYY-MM-DD (или полный ISO) → «YYYY-MM-DD» для лексикографического сравнения дат. */
+function dateOnly(v: unknown): string {
+  const s = str(v);
+  return s.length >= 10 ? s.slice(0, 10) : '';
+}
+
+function inRange(dateStr: unknown, from: string, to: string): boolean {
+  const d = dateOnly(dateStr);
+  if (!d) return false;
+  if (from && d < from) return false;
+  if (to && d > to) return false;
+  return true;
+}
+
 async function getLimsRequestsTool(args: Record<string, unknown>): Promise<ToolCallResult> {
   try {
     const status = String(args.status || '').trim();
     const compliance = String(args.compliance || '').trim();
+    const labQuery = String(args.lab || '').trim();
+    const dateFrom = dateOnly(args.date_from);
+    const dateTo = dateOnly(args.date_to);
     const limit = Number(args.limit) || 20;
     let items = await agentApi.getLimsRequests();
+
+    let labNote = '';
+    if (labQuery) {
+      const labs = await agentApi.getLimsLabs();
+      const q = labQuery.toLowerCase();
+      const matched = labs.filter(l => str(l.name).toLowerCase().includes(q) || str(l.code).toLowerCase().includes(q));
+      if (matched.length === 0) {
+        const available = labs.map(l => str(l.name)).filter(Boolean).join(', ');
+        return { ok: false, summary: '', error: `Лаборатория «${labQuery}» не найдена. Доступные лаборатории: ${available || 'нет данных'}.` };
+      }
+      const matchedIds = new Set(matched.map(l => l.id));
+      items = items.filter(i => matchedIds.has(i.lab_id));
+      labNote = `, лаборатория: ${matched.map(l => str(l.name)).join(', ')}`;
+    }
     if (status) items = items.filter(i => str(i.status).toLowerCase() === status.toLowerCase());
     if (compliance) items = items.filter(i => str(i.compliance).toLowerCase() === compliance.toLowerCase());
+    if (dateFrom || dateTo) {
+      items = items.filter(i => inRange(i.created_at, dateFrom, dateTo) || inRange(i.completed_at, dateFrom, dateTo));
+    }
     const picked = limitItems(items, limit).map(i => ({
       id: i.id, title: i.title, customer_number: i.customer_number, lab_number: i.lab_number,
-      status: i.status, result: i.result, compliance: i.compliance,
-      owner_email: i.owner_email, updated_at: i.updated_at, completed_at: i.completed_at,
+      status: i.status, result: i.result, compliance: i.compliance, owner_email: i.owner_email,
+      created_at: i.created_at, updated_at: i.updated_at, completed_at: i.completed_at,
     }));
-    return { ok: true, summary: `Заявки ЛИМС (источник: server): найдено ${items.length}, показано ${picked.length}.`, data: { source: 'server', total: items.length, items: picked } };
+    const dateNote = (dateFrom || dateTo) ? `, период: ${dateFrom || '…'}..${dateTo || '…'} (по дате регистрации ИЛИ завершения)` : '';
+    return {
+      ok: true,
+      summary: `Заявки ЛИМС (источник: server${labNote}${dateNote}): найдено ${items.length}, показано ${picked.length}.`,
+      data: { source: 'server', total: items.length, items: picked },
+    };
   } catch (e: unknown) {
     return { ok: false, summary: '', error: errorMessage(e) };
   }
@@ -311,6 +351,76 @@ async function getPhotoLinkTool(args: Record<string, unknown>): Promise<ToolCall
       link: { url, label: '🖼 Открыть фото' },
       data: { url },
     };
+  } catch (e: unknown) {
+    return { ok: false, summary: '', error: errorMessage(e) };
+  }
+}
+
+// ================= describe_api / call_api =================
+// Белый список эндпоинтов — apiManifest.ts. Не даёт агенту доступ к произвольному
+// пути/методу — только к перечисленным там GET-эндпоинтам сервисов, к которым у
+// пользователя и так есть права (сервер сам проверяет JWT/requirePerm).
+
+function describeApiTool(ctx: AgentToolContext, args: Record<string, unknown>): ToolCallResult {
+  const appId = String(args.app_id || '').trim();
+  const availableAppIds = new Set(ctx.getSources().filter(s => s.available).map(s => s.appId));
+  const entries = API_MANIFEST.filter(e => availableAppIds.has(e.appId) && (!appId || e.appId === appId));
+  return {
+    ok: true,
+    summary: `Доступно эндпоинтов: ${entries.length}${appId ? ` для app_id «${appId}»` : ''}. Вызывай их через call_api.`,
+    data: {
+      endpoints: entries.map(e => ({
+        app_id: e.appId, path: e.path, method: 'GET', description: e.description,
+        path_params: e.pathParams, query: e.query,
+      })),
+    },
+  };
+}
+
+function fillPathParams(path: string, pathParams: Record<string, unknown>): string {
+  return path.replace(/\{(\w+)\}/g, (_match, key: string) => {
+    const v = pathParams[key];
+    if (v === undefined || v === null || v === '') throw new Error(`Не хватает параметра пути «${key}» для ${path} — передай его в path_params.`);
+    return encodeURIComponent(String(v));
+  });
+}
+
+async function callApiTool(ctx: AgentToolContext, args: Record<string, unknown>): Promise<ToolCallResult> {
+  try {
+    const appId = String(args.app_id || '').trim();
+    const path = String(args.path || '').trim();
+    const availableAppIds = new Set(ctx.getSources().filter(s => s.available).map(s => s.appId));
+    if (!availableAppIds.has(appId)) return { ok: false, summary: '', error: `Нет доступа к app_id «${appId}» (проверь источники или вызови describe_api).` };
+    const entry = API_MANIFEST.find(e => e.appId === appId && e.path === path);
+    if (!entry) return { ok: false, summary: '', error: `Эндпоинт «${path}» для app_id «${appId}» не в белом списке — сначала вызови describe_api, чтобы увидеть доступные пути.` };
+
+    const pathParamsArg = (args.path_params && typeof args.path_params === 'object') ? args.path_params as Record<string, unknown> : {};
+    const resolvedPath = fillPathParams(entry.path, pathParamsArg);
+
+    const queryArg = (args.query && typeof args.query === 'object') ? args.query as Record<string, unknown> : {};
+    const query: Record<string, string> = {};
+    for (const [k, v] of Object.entries(queryArg)) if (v !== undefined && v !== null) query[k] = String(v);
+
+    const result = await agentApi.callAppApi(appId, resolvedPath, query);
+
+    // Общая защита от раздувания контекста: если в ответе есть массив длиннее лимита — обрезаем его.
+    const limit = Math.max(1, Math.min(Number(args.limit) || 50, 200));
+    let payload = result;
+    let note = '';
+    if (result && typeof result === 'object' && !Array.isArray(result)) {
+      const obj = result as Record<string, unknown>;
+      for (const [key, val] of Object.entries(obj)) {
+        if (Array.isArray(val) && val.length > limit) {
+          note = `, массив «${key}»: ${val.length}, показано ${limit}`;
+          payload = { ...obj, [key]: val.slice(0, limit) };
+          break;
+        }
+      }
+    } else if (Array.isArray(result) && result.length > limit) {
+      note = `, массив: ${result.length}, показано ${limit}`;
+      payload = result.slice(0, limit);
+    }
+    return { ok: true, summary: `call_api ${appId} ${resolvedPath}${note}`, data: payload };
   } catch (e: unknown) {
     return { ok: false, summary: '', error: errorMessage(e) };
   }
@@ -690,13 +800,16 @@ export function createTools(): AgentTool[] {
     {
       schema: {
         name: 'get_lims_requests',
-        description: 'Заявки на испытания из ЛИМС (доступен, если у пользователя есть права на плагин «Заявки на испытания»/«ЛИМС»). Возвращает title, result (итоговый результат испытания), compliance (вердикт: «Соответствует»/«Не соответствует»/«Не оценивается», пусто — не посчитан), статус, номера. Фильтруй по compliance, чтобы найти заявки с конкретным вердиктом (например «Не соответствует»), а не листай все заявки вручную.',
+        description: 'Заявки на испытания из ЛИМС (доступен, если у пользователя есть права на плагин «Заявки на испытания»/«ЛИМС»). Возвращает title, result (итоговый результат испытания), compliance (вердикт: «Соответствует»/«Не соответствует»/«Не оценивается», пусто — не посчитан), статус, номера, created_at (дата регистрации/поступления), completed_at (дата завершения). ВСЕГДА фильтруй по lab/date_from/date_to, если пользователь называет лабораторию или период (например, для графика поступления/завершения заявок за месяц в конкретной лаборатории) — НЕ выгружай все заявки без фильтра ради подсчёта вручную, это может достигать сотен записей и не поместится в контекст. Аналогично фильтруй по compliance, чтобы найти заявки с конкретным вердиктом.',
         input_schema: {
           type: 'object',
           properties: {
             status: { type: 'string', description: 'new/processing/completed' },
             compliance: { type: 'string', description: 'Точное совпадение: «Соответствует», «Не соответствует» или «Не оценивается»' },
-            limit: { type: 'number', description: 'По умолчанию 20, максимум 200 (после фильтра по status/compliance)' },
+            lab: { type: 'string', description: 'Название или код лаборатории (частичное совпадение, например «пожарных»)' },
+            date_from: { type: 'string', description: 'Начало периода, YYYY-MM-DD. Заявка проходит, если в диапазон попадает дата регистрации ИЛИ дата завершения' },
+            date_to: { type: 'string', description: 'Конец периода, YYYY-MM-DD' },
+            limit: { type: 'number', description: 'По умолчанию 20, максимум 200 (после фильтров status/compliance/lab/date_from/date_to)' },
           },
         },
       },
@@ -717,6 +830,32 @@ export function createTools(): AgentTool[] {
         input_schema: { type: 'object', properties: { file_key: { type: 'string' } }, required: ['file_key'] },
       },
       execute: async (_ctx, args) => getPhotoLinkTool(args),
+    },
+    {
+      schema: {
+        name: 'describe_api',
+        description: 'Список read-only эндпоинтов, доступных через call_api (справочники ЛИМС — лаборатории/методы/проекты/объекты/группы/оборудование/испытатели, доп. срезы фотобанка и т.п.), помимо уже готовых get_*-тулов. Используй, когда нужных данных нет ни в одном get_*-туле — сначала посмотри список, потом вызывай call_api именно с тем path/app_id, что здесь показан.',
+        input_schema: { type: 'object', properties: { app_id: { type: 'string', description: 'Ограничить список одним сервисом: lab/photo (пусто — показать все доступные)' } } },
+      },
+      execute: async (ctx, args) => describeApiTool(ctx, args),
+    },
+    {
+      schema: {
+        name: 'call_api',
+        description: 'Вызвать один из эндпоинтов, показанных describe_api. Только чтение (GET), только эндпоинты из белого списка — произвольный путь не сработает.',
+        input_schema: {
+          type: 'object',
+          properties: {
+            app_id: { type: 'string', description: 'Как в describe_api, например lab/photo' },
+            path: { type: 'string', description: 'Точно как в describe_api, например /api/lab/equipment/{id}/calibrations' },
+            path_params: { type: 'object', description: 'Значения для {подстановок} в path, например {"id": 42}' },
+            query: { type: 'object', description: 'Query-параметры, см. describe_api (например {"q":"..."} для поиска)' },
+            limit: { type: 'number', description: 'Максимум элементов в массиве ответа, по умолчанию 50, максимум 200' },
+          },
+          required: ['app_id', 'path'],
+        },
+      },
+      execute: async (ctx, args) => callApiTool(ctx, args),
     },
     {
       schema: {

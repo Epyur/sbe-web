@@ -74,6 +74,30 @@ export async function getLimsRequests(): Promise<Record<string, unknown>[]> {
   return Array.isArray(data.requests) ? (data.requests as Record<string, unknown>[]) : [];
 }
 
+/** Generic GET для describe_api/call_api (см. modules/agent/apiManifest.ts) — тот же
+ * JWT-механизм по app_id, что и у остальных функций этого файла; путь и параметры
+ * приходят уже проверенными против белого списка (вызывающий код в tools.ts). */
+export async function callAppApi(
+  appId: string,
+  path: string,
+  query: Record<string, string>,
+): Promise<unknown> {
+  const url = new URL(`${API_BASE}${path}`);
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== '') url.searchParams.set(key, value);
+  }
+  return requestJSON<unknown>(url.toString(), { headers: await authHeader(appId), timeoutMs: 60000 });
+}
+
+/** Справочник лабораторий — нужен get_lims_requests, чтобы отфильтровать заявки по
+ * лаборатории (сам объект заявки несёт только числовой lab_id). */
+export async function getLimsLabs(): Promise<Record<string, unknown>[]> {
+  const data = await requestJSON<Record<string, unknown>>(`${API_BASE}/api/lab/labs`, {
+    headers: await authHeader('lab'),
+  });
+  return Array.isArray(data.labs) ? (data.labs as Record<string, unknown>[]) : [];
+}
+
 export async function getPhotos(): Promise<Record<string, unknown>[]> {
   const data = await requestJSON<Record<string, unknown>>(`${API_BASE}/api/photo/sync/pull`, {
     headers: await authHeader('photo'),
