@@ -9,7 +9,9 @@ export function errorMessage(e: unknown): string {
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
-    super(message);
+    // Защита от "[object Object]": message должен быть строкой, но внешние
+    // API (не наши сервисы) иногда отдают неожиданную форму ошибки.
+    super(typeof message === 'string' ? message : String(message));
     this.status = status;
   }
 }
@@ -41,10 +43,19 @@ export async function apiRequest(url: string, opts: RequestOptions = {}): Promis
   return res;
 }
 
+/** Достаёт текст ошибки из тела ответа. Наши сервисы отдают {error: "текст"},
+ * но upstream-провайдеры (например chadgpt/OpenAI-совместимые через llm-service)
+ * отдают вложенный {error: {message: "текст", ...}} — раньше объект-error
+ * утекал как есть в конструктор Error и превращался в "[object Object]". */
 async function errorText(res: Response): Promise<string> {
   try {
-    const data = (await res.clone().json()) as { error?: string };
-    return data.error || '';
+    const data = (await res.clone().json()) as { error?: unknown };
+    if (typeof data.error === 'string') return data.error;
+    if (data.error && typeof data.error === 'object') {
+      const nested = (data.error as { message?: unknown }).message;
+      if (typeof nested === 'string') return nested;
+    }
+    return '';
   } catch {
     return '';
   }

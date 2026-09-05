@@ -22,6 +22,7 @@ function logout(): void {
       <nav class="sw-topbar__nav">
         <RouterLink to="/photobank" class="sw-topbar__link">Фотобанк</RouterLink>
         <RouterLink to="/requests" class="sw-topbar__link">Заявки на испытания</RouterLink>
+        <RouterLink to="/agent" class="sw-topbar__link">LogicTEAM.007</RouterLink>
       </nav>
       <div class="sw-topbar__user">
         <RouterLink to="/settings" class="sw-topbar__gear" title="Настройки">⚙️</RouterLink>

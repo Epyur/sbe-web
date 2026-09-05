@@ -36,7 +36,13 @@ a:hover {
 }
 
 .sw-shell {
-  min-height: 100vh;
+  /* Жёсткая, а не минимальная высота — иначе при длинном контенте (например
+     истории чата LogicTEAM.007) вся оболочка растёт сверх вьюпорта и скроллит
+     ВСЮ страницу браузером, а не внутренний блок с прокруткой (.sw-content/
+     .sw-agent-messages) — из-за этого поле ввода в agent-модуле «уезжало»
+     вместе с историей вместо того, чтобы оставаться закреплённым внизу. */
+  height: 100vh;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
 }
@@ -229,8 +235,7 @@ a:hover {
 
 .sw-tile {
   width: 220px;
-  padding: 32px 20px;
-  text-align: center;
+  overflow: hidden;
   cursor: pointer;
   transition: box-shadow 0.15s, transform 0.15s;
 }
@@ -246,19 +251,11 @@ a:hover {
   pointer-events: none;
 }
 
-.sw-tile__icon {
-  font-size: 40px;
-  margin-bottom: 12px;
-}
-
-.sw-tile__title {
-  font-weight: 600;
-  margin-bottom: 4px;
-}
-
-.sw-tile__hint {
-  font-size: 12px;
-  color: var(--sw-text-muted);
+.sw-tile__cover {
+  display: block;
+  width: 100%;
+  height: auto;
+  object-fit: contain;
 }
 
 .sw-layout {
@@ -604,4 +601,73 @@ a:hover {
 
 .sw-protocol-html th {
   background: var(--sw-bg);
+}
+
+/* ================= LogicTEAM.007 (agent) ================= */
+
+/* Заполняет .sw-content по высоте (родитель — flex-контейнер с definite
+ * height от .sw-layout/.sw-main/.sw-shell), сам делит место между
+ * прокручиваемой лентой сообщений и закреплённым низом (ввод+модель) —
+ * поле ввода не должно уезжать за экран по мере роста переписки. */
+.sw-agent-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.sw-agent-header {
+  flex-shrink: 0;
+}
+
+.sw-agent-messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 2px;
+}
+
+.sw-agent-msg {
+  border-radius: var(--sw-radius);
+  padding: 10px 14px;
+  background: var(--sw-surface);
+  border: 1px solid var(--sw-border);
+  max-width: 90%;
+}
+
+.sw-agent-msg--user {
+  align-self: flex-end;
+  background: var(--sw-accent);
+  color: #fff;
+  border-color: var(--sw-accent);
+}
+
+.sw-agent-msg--tool {
+  background: var(--sw-bg);
+  font-size: 13px;
+}
+
+.sw-agent-msg__role {
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.7;
+  margin-bottom: 4px;
+}
+
+.sw-agent-msg__content {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.sw-agent-input {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--sw-border);
+  padding-top: 12px;
+  width: 100%;
 }

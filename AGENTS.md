@@ -32,11 +32,14 @@
 | `src/api/authApi.ts` | `requestLink`/`consumeLink`/`getToken` (кэш JWT в памяти на `app_id`) |
 | `src/api/photoApi.ts` | Клиент photo-service (только используемые read+social эндпоинты) |
 | `src/api/labApi.ts` | Клиент lab-service (requests/projects/objects/groups/permissions/files/protocol) |
+| `src/api/llmApi.ts` | Клиент llm-service: ключ провайдера пользователя (`getStatus`/`setApiKey`/`deleteApiKey`, `SettingsView`), `listModels`/`complete`/`completeJson` (порт `SbeLlmApi`, для agent-модуля) |
+| `src/api/agentApi.ts` | Клиент agent-service: файлы (generate/parse), данные (mailer/documents/contacts/lab/photo pull, всегда напрямую), скилы (только глобальные), история диалогов, правила, системный промпт, скретч-хранилище (S3, 48ч) |
 | `src/store/session.ts` | Сессия (`{key, device_id, email}`) в `localStorage`, реактивное состояние |
 | `src/router.ts` | Hash-роутинг (`createWebHashHistory`) — magic-link `#/verify?token=...` |
-| `src/views/` | `LoginView`/`VerifyView`/`LauncherView` |
+| `src/views/` | `LoginView`/`VerifyView`/`LauncherView`/`SettingsView` (ключ ИИ) |
 | `src/modules/photobank/` | `PhotobankView` + `FolderTree`/`PhotoThumb`/`PhotoDetailModal` |
 | `src/modules/requests/` | `RequestsView` + `ProjectTree`/`ProjectsPanel`/`RequestDetail`/`RequestCreateModal`/`GroupsPanel`/`PermissionsPanel` |
+| `src/modules/agent/` | `AgentView` (чат LogicTEAM.007) + `agentEngine.ts` (цикл LLM↔тулы, порт sbe-agent) + `tools.ts` (реестр тулов) + `systemPrompt.ts` |
 
 ## Правила
 
@@ -50,6 +53,98 @@
 - Коммиты/пуши — только по явной команде пользователя («Фиксируй»).
 
 ## История работ
+
+### 2026-09-04/05 — v0.1.5 (LogicTEAM.007 в вебе — новый модуль `src/modules/agent/`)
+
+Полный перенос универсального LLM-агента (Obsidian-плагин `sbe-agent`) в веб.
+Дизайн: `docs/superpowers/specs/2026-09-04-sbe-agent-web-design.md`. Ключевой
+факт: цикл агента (LLM↔тулы) жил в TS-коде плагина, не на сервере —
+agent-service остаётся файловым/скиловым бэкендом (расширен per-user
+таблицами/скретчем, см. `sbe-agent/agent-service/AGENTS.md` за 2026-09-05),
+а сам цикл написан заново в `agentEngine.ts` (порт `agent-engine.ts`
+почти без изменений — парсинг ходов/защита от зацикливания/лимит итераций
+идентичны).
+
+**Перенесено как есть** (адаптация — `fetch`+JWT вместо `requestUrl`, не логика):
+`create_docx/xlsx/pdf/json/mermaid/png/html`, `parse_file`, `get_lims_requests`,
+`get_photos`/`get_photo_link`, `fetch_url`. `get_emails`/`get_documents`/
+`get_contacts` — убрана ветка «сначала локальный кэш» (в вебе кэша нет,
+всегда напрямую). Скилы — только глобальные (`list_skills`/`read_skill`;
+`add_skill` — только для уже глобальных, иначе явная ошибка вместо попытки
+скачать с GitHub/писать в несуществующий вольт).
+
+**Новое хранилище вместо путей в вольте**: `read_text_part`,
+`save_records`/`build_xlsx_from_records` (было `*_to_vault`) — S3-скретч на
+agent-service (48ч). Правила (`save_rule`/`list_rules`/`read_rule`) и
+системный промпт (переопределение `SYSTEM_PROMPT_TEMPLATE`) — новые per-user
+таблицы на agent-service (аналога в Obsidian-версии, кроме файлов вольта, не
+было).
+
+**Исключено полностью** (техническая невозможность/нет сервера, не выбор
+объёма): `read_local_cache`, `get_tasks` (кэш YouGile — только в вольте),
+весь `browser_*` (7 тулов — Electron-embedded browser, обычная веб-страница
+не может скриптовать чужой origin).
+
+**Отдельная находка, не связанная с переносом**: `GET /api/llm/models`
+(список моделей chadgpt, цены) уже был реализован на сервере и в
+`SbeLlmApi.listModels()`, но НИ ОДИН потребитель (включая сам Obsidian-плагин
+sbe-agent) его не вызывал — добавлен выпадающий список моделей в чат
+(`llmApi.ts` дополнен `listModels`/`complete`/`completeJson`, существующие
+`getStatus`/`setApiKey`/`deleteApiKey` для ключа ИИ в `SettingsView` не
+тронуты).
+
+**Живое тестирование пользователем нашло и было исправлено**:
+- `get_photo_link` не проставлял `link` в результате — кнопка «Открыть фото»
+  не появлялась, ссылка терялась, хотя тул рапортовал успех.
+- Таймаут LLM-запроса был 30с (дефолт `apiRequest`), а не 180с как в
+  оригинале (`llm-center.ts`) — «signal is aborted without reason» на
+  обычных ответах с большим транскриптом. Добавлены 180с таймаут + ретраи на
+  429/504/сетевые сбои с экспоненциальной задержкой (порт `retryWithBackoff`).
+- `errorText()` в общем `src/api/http.ts` не понимал вложенный формат ошибок
+  провайдера (`{error:{message}}`, OpenAI-style от chadgpt) — тонул в
+  «[object Object]». Теперь разбирает оба формата; `ApiError` защищён от
+  нестроковых сообщений и на будущее.
+- `get_lims_requests` дёргал `/api/lab/sync/pull` (минимальный набор полей
+  для офлайн-кэша, включая ветку, которую в вебе так и так убрали) вместо
+  `/api/lab/requests` (тот же эндпоинт, что и `modules/requests`, отдаёт
+  `title`/`result`/`compliance`) — агент не мог определить вердикт «Не
+  соответствует» по заявке и уходил искать в письмах. Переключено на
+  `/api/lab/requests` + добавлен параметр `compliance` для прямой фильтрации.
+- Модель нужно было выбирать явно и её выбор запоминать — раньше сбрасывалась
+  на неявный дефолт при каждой загрузке, без модели запрос падал с неясной
+  ошибкой. Теперь выбор персистится (`localStorage`), при загрузке моделей
+  автовыбирается сохранённая или первая из списка, отправка заблокирована,
+  если моделей нет вовсе.
+- Модель периодически повторно искала уже найденные в диалоге данные
+  (`get_photos`/`get_photo_link` заново на следующее сообщение) — в системный
+  промпт добавлено явное указание переиспользовать данные, уже полученные
+  выше в этом же диалоге.
+- Цена модели в дропдауне: валюта не подтверждена (chadgpt.ru не отдаёт
+  публичную документацию) — показывается без знака валюты, чтобы не
+  утверждать неверное; была ошибочная позиция «$».
+
+**UI/layout, отдельные правки по итогам живого тестирования**:
+- **Общая для всего портала правка**: `.sw-shell` использовал
+  `min-height: 100vh` вместо `height: 100vh` — при длинном контенте (история
+  чата) вся оболочка росла сверх вьюпорта и скроллилась браузером целиком,
+  а не внутренним блоком (`.sw-content`/`.sw-agent-messages`), из-за чего
+  закреплённое поле ввода «уезжало». Исправлено на жёсткую высоту +
+  `overflow: hidden` — заодно должно поправить (ранее не замеченное)
+  поведение сайдбара/контента в `photobank`/`requests`.
+- Чат: поле ввода закреплено внизу (`.sw-agent-page` flex-колонка на всю
+  высоту, `.sw-agent-messages` — единственный скроллящийся блок,
+  автопрокрутка на новые сообщения), full-bleed на всю ширину (было
+  `max-width: 860px`), модель — под полем ввода, «⚙ Настройки агента»
+  перенесены в сайдбар (модалка `.sw-modal`).
+- Обложки плиток лаунчера (`LauncherView.vue`) — `photo.png`/`lab.png`/
+  `llm.png` (`public/covers/`) вместо эмодзи, full-bleed без подписи снизу
+  (изображения уже содержат название модуля), маленький размер плитки (было
+  48×48 — по правке пользователя, теперь заполняет всю плитку).
+
+`npx vue-tsc -b && vite build` — чисто на каждом шаге. Деплой — атомарный
+(`app.new` → `mv`) по образцу существующего процесса, несколько раундов за
+сессию по итогам живого тестирования пользователем на реальных данных
+(письма/ЛИМС/фотобанк/скилы).
 
 ### 2026-09-04 — v0.1.4 (сводный Excel-экспорт по выбранным заявкам; «Выделить все»)
 
