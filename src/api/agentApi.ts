@@ -132,6 +132,18 @@ export async function getPhotoLink(fileKey: string): Promise<string> {
   return data.url || '';
 }
 
+/** Презигненная ссылка на файл документа (documents-service, GET /api/documents/
+ * file-link, ~7 дней) — та же логика, что и у файла фотобанка: file_url,
+ * который отдаёт sync/pull, ведёт на приватный бакет и напрямую не скачивается,
+ * рабочую ссылку даёт только этот эндпоинт по file_key. */
+export async function getDocumentLink(fileKey: string): Promise<string> {
+  const data = await requestJSON<{ url?: string }>(
+    `${API_BASE}/api/documents/file-link?key=${encodeURIComponent(fileKey)}`,
+    { headers: await authHeader('documents'), timeoutMs: 60000 },
+  );
+  return data.url || '';
+}
+
 // ================= fetch_url (скрытый серверный HTTP через agent-service) =================
 
 export interface FetchUrlResponse {

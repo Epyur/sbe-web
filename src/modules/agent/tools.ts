@@ -354,9 +354,26 @@ async function getDocumentsTool(args: Record<string, unknown>): Promise<ToolCall
     items = items.filter(i => matchesQuery(i, query));
     const picked = limitItems(items, limit).map(i => ({
       id: i.id, title: i.title, doc_type: i.doc_type, curator_email: i.curator_email, deadline: i.deadline,
-      file_name: i.file_name, link_url: i.link_url, parent_id: i.parent_id, completed: i.completed, updated_at: i.updated_at,
+      file_name: i.file_name, file_key: i.file_key, link_url: i.link_url, parent_id: i.parent_id, completed: i.completed, updated_at: i.updated_at,
     }));
     return { ok: true, summary: `Документы (источник: server): найдено ${items.length}, показано ${picked.length}.`, data: { source: 'server', total: items.length, items: picked } };
+  } catch (e: unknown) {
+    return { ok: false, summary: '', error: errorMessage(e) };
+  }
+}
+
+async function getDocumentLinkTool(args: Record<string, unknown>): Promise<ToolCallResult> {
+  const fileKey = String(args.file_key || '').trim();
+  if (!fileKey) return { ok: false, summary: '', error: 'Требуется поле file_key (из get_documents).' };
+  try {
+    const url = await agentApi.getDocumentLink(fileKey);
+    if (!url) return { ok: false, summary: '', error: 'Сервер не вернул ссылку на файл.' };
+    return {
+      ok: true,
+      summary: 'Ссылка на файл документа получена — пользователю показана кнопка «Открыть файл» (действует ~7 дней). Скажи пользователю, что можно открыть/скачать документ кнопкой в сообщении тула; НЕ вставляй длинный URL в текст ответа.',
+      link: { url, label: '📄 Открыть файл' },
+      data: { url },
+    };
   } catch (e: unknown) {
     return { ok: false, summary: '', error: errorMessage(e) };
   }
@@ -1053,7 +1070,7 @@ export function createTools(): AgentTool[] {
     {
       schema: {
         name: 'get_emails',
-        description: 'Поиск писем в базе почты (доступен, если у пользователя есть права на плагин «Письма»). Всегда напрямую из БД сервера.',
+        description: 'Поиск писем в базе почты (доступен, если у пользователя есть права на плагин «Письма»). Всегда напрямую из БД сервера. query — точное вхождение подстроки (без учёта регистра), НЕ семантический поиск — для русских слов ищи короткой основой без окончания (например «техническ», а не «техническое»), иначе форма слова в тексте не совпадёт. Пустой результат узкого запроса — НЕ доказательство, что нужной информации нет: если письма по более широкой теме уже получены в этом диалоге, сначала проверь их полный текст (поле text), прежде чем говорить пользователю, что информации нет.',
         input_schema: { type: 'object', properties: { query: { type: 'string' }, direction: { type: 'string' }, limit: { type: 'number', description: 'По умолчанию 20, максимум 200' } } },
       },
       execute: async (_ctx, args) => getEmailsTool(args),
@@ -1061,15 +1078,23 @@ export function createTools(): AgentTool[] {
     {
       schema: {
         name: 'get_documents',
-        description: 'Поиск документов в базе документов (доступен, если у пользователя есть права на плагин «Документы»). Всегда напрямую из БД сервера.',
+        description: 'Поиск документов в базе документов (доступен, если у пользователя есть права на плагин «Документы»). Всегда напрямую из БД сервера. У карточки может быть ЛИБО внешняя ссылка (link_url — например, файл в YouGile), ЛИБО загруженный в систему файл (тогда есть file_key, а link_url пусто) — это два РАЗНЫХ способа приложить файл, не «есть ссылка / нет файла». Если link_url пусто, но file_key заполнен — файл ЕСТЬ, просто нужно получить рабочую ссылку через get_document_link(file_key); НЕ говори пользователю, что файла нет или что нужно спрашивать куратора, пока не проверил именно так. query — точное вхождение подстроки (без учёта регистра) по всем текстовым полям, НЕ семантический поиск — для русских слов ищи короткой основой без окончания (например «техническ», а не «техническое»), иначе форма слова в тексте («техническая», «технического» и т.п.) не совпадёт и результат будет пустым, хотя нужное есть.',
         input_schema: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'number', description: 'По умолчанию 20, максимум 200' } } },
       },
       execute: async (_ctx, args) => getDocumentsTool(args),
     },
     {
       schema: {
+        name: 'get_document_link',
+        description: 'Получить временную ссылку на загруженный файл документа (presigned, действует ~7 дней). Передай file_key из карточки get_documents (доступно только когда там нет link_url, но есть file_key).',
+        input_schema: { type: 'object', properties: { file_key: { type: 'string' } }, required: ['file_key'] },
+      },
+      execute: async (_ctx, args) => getDocumentLinkTool(args),
+    },
+    {
+      schema: {
         name: 'get_contacts',
-        description: 'Поиск контактов (доступен, если у пользователя есть права на плагин «Контакты»). Всегда напрямую из БД сервера.',
+        description: 'Поиск контактов (доступен, если у пользователя есть права на плагин «Контакты»). Всегда напрямую из БД сервера. query — точное вхождение подстроки (без учёта регистра), НЕ семантический поиск — для русских слов ищи короткой основой без окончания.',
         input_schema: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'number', description: 'По умолчанию 20, максимум 200' } } },
       },
       execute: async (_ctx, args) => getContactsTool(args),
