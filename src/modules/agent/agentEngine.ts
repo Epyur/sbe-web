@@ -18,6 +18,28 @@ import { errorMessage, AbortedByUserError } from '../../api/http';
 
 const DEFAULT_MAX_ITERATIONS = 15;
 
+/** Кап на JSON одного результата тула, отправляемый модели В ТЕКУЩЕМ ходу
+ * (см. summaryForLlm). При превышении — честный отказ, не обрезка посередине
+ * JSON (была живая жалоба 2026-09-06, см. docs/superpowers/specs/
+ * 2026-09-06-web-agent-context-compaction-design.md). */
+const MAX_TOOL_DATA_CHARS = 30000;
+
+/** Порог суммарной длины истории диалога (символы), при превышении которого
+ * AgentEngine сжимает старую часть в дайджест перед новым ходом. */
+const HISTORY_COMPACT_THRESHOLD_CHARS = 50000;
+
+/** Сколько последних сообщений всегда остаются несжатыми (ближайший контекст). */
+const HISTORY_KEEP_RECENT = 8;
+
+const COMPACTION_SYSTEM_PROMPT = [
+  'Сожми историю диалога агента в компактный структурированный дайджест на русском.',
+  'ОБЯЗАТЕЛЬНО сохрани ВСЕ числа, id, даты, названия и принятые решения — списком',
+  'или таблицей, не прозой. Не выдумывай ничего, чего нет в истории.',
+  'Если в начале истории уже есть дайджест прошлого сжатия (помечен как',
+  '"[Свёрнутая история]") — ОБНОВИ его, не потеряв ни одного факта из него,',
+  'и добавь факты из новых сообщений. Верни ТОЛЬКО текст дайджеста, без пояснений.',
+].join(' ');
+
 /** Идемпотентные тулы (нет в веб-версии — browser_* не перенесены), оставлено
  * пустым намеренно: fetch_url НЕ идемпотентен (повтор — зацикливание). */
 const IDEMPOTENT_TOOLS = new Set<string>([]);
@@ -84,11 +106,40 @@ export class AgentEngine {
         lines.push(`[Ассистент] ${m.content}`);
       } else if (m.role === 'tool') {
         lines.push(`[Результат тула ${m.tool || ''} (${m.toolOk ? 'ok' : 'ошибка'})] ${m.content.slice(0, 15000)}`);
+      } else if (m.role === 'summary') {
+        lines.push(`[Свёрнутая история] ${m.content}`);
       }
     }
     lines.push('');
     lines.push('Твой ход (только JSON):');
     return lines.join('\n');
+  }
+
+  /** Сжимает старую часть истории в дайджест, если суммарная длина превысила
+   * порог — иначе не трогает dialog.messages. Последние HISTORY_KEEP_RECENT
+   * сообщений всегда остаются как есть. При сбое сжатия (ошибка LLM) — тихо
+   * пропускает, run() продолжает с полной историей. */
+  private async compactHistoryIfNeeded(dialog: Dialog): Promise<void> {
+    const totalLength = dialog.messages.reduce((sum, m) => sum + m.content.length, 0);
+    if (totalLength <= HISTORY_COMPACT_THRESHOLD_CHARS || dialog.messages.length <= HISTORY_KEEP_RECENT) {
+      return;
+    }
+    const older = dialog.messages.slice(0, -HISTORY_KEEP_RECENT);
+    const recent = dialog.messages.slice(-HISTORY_KEEP_RECENT);
+    const oldPart = this.serializeHistory({ ...dialog, messages: older })
+      .replace(/\n\nТвой ход \(только JSON\):$/, '');
+    try {
+      const digest = await llmApi.complete(COMPACTION_SYSTEM_PROMPT, oldPart);
+      const digestText = digest.trim();
+      if (!digestText) return;
+      dialog.messages = [
+        { role: 'summary', content: digestText, created_at: new Date().toISOString() },
+        ...recent,
+      ];
+      await agentApi.saveDialog(dialog);
+    } catch (e: unknown) {
+      console.warn('LogicTEAM.007: не удалось сжать историю диалога, продолжаю с полной:', errorMessage(e));
+    }
   }
 
   private findTool(name: string): AgentTool | undefined {
@@ -99,6 +150,7 @@ export class AgentEngine {
     const controller = new AbortController();
     this.abortController = controller;
     const system = await this.buildSystemPrompt();
+    await this.compactHistoryIfNeeded(params.dialog);
     let transcript = this.serializeHistory(params.dialog);
     const seenCalls = new Map<string, number>();
 
@@ -223,8 +275,10 @@ export class AgentEngine {
     let json = '';
     try {
       json = JSON.stringify(data);
-      if (json.length > 30000) json = json.slice(0, 30000) + '\n…(обрезано)';
     } catch { json = String(data); }
+    if (json.length > MAX_TOOL_DATA_CHARS) {
+      return `${summary}\nДанные слишком большие (${json.length} символов, лимит ${MAX_TOOL_DATA_CHARS}) — не показаны. Уточни фильтр/лимит или используй агрегирующий тул, если он есть.`;
+    }
     return `${summary}\nДанные: ${json}`;
   }
 }

@@ -1,7 +1,9 @@
 /** Типы модуля LogicTEAM.007 (agent) — веб-версия. Зеркалит sbe-agent
  * (Obsidian-плагин) src/types/agent.ts, без частей, зависящих от вольта. */
 
-export type AgentRole = 'user' | 'assistant' | 'tool';
+/** 'summary' — сжатая история (см. AgentEngine.compactHistoryIfNeeded), не
+ *  обычная реплика ассистента. */
+export type AgentRole = 'user' | 'assistant' | 'tool' | 'summary';
 
 export interface AgentMessageLink {
   url: string;

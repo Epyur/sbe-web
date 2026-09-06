@@ -650,6 +650,17 @@ a:hover {
   font-size: 13px;
 }
 
+/* Сжатая история диалога (AgentEngine.compactHistoryIfNeeded) — приглушённый
+ * блок, не обычная реплика ассистента. */
+.sw-agent-msg--summary {
+  align-self: center;
+  background: var(--sw-bg);
+  border-style: dashed;
+  font-size: 12px;
+  opacity: 0.75;
+  max-width: 95%;
+}
+
 .sw-agent-msg__role {
   font-size: 12px;
   font-weight: 600;

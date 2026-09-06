@@ -422,7 +422,7 @@ watch(() => activeDialog.value?.messages.length, scrollToBottom);
               :class="`sw-agent-msg--${m.role}`"
             >
               <div class="sw-agent-msg__role">
-                {{ m.role === 'user' ? 'Вы' : m.role === 'assistant' ? 'Агент' : `Инструмент: ${m.tool}` }}
+                {{ m.role === 'user' ? 'Вы' : m.role === 'assistant' ? 'Агент' : m.role === 'summary' ? '📎 Свёрнутая история' : `Инструмент: ${m.tool}` }}
               </div>
               <div class="sw-agent-msg__content">{{ m.content }}</div>
               <a v-if="m.link" :href="m.link.url" target="_blank" rel="noopener" class="sw-btn sw-btn--primary" style="margin-top: 6px; display: inline-block">
