@@ -51,8 +51,18 @@ function posCss(pos: ElementPos | undefined, defaults: Array<[PosKey, string]>):
   return parts.join(';');
 }
 
-function bgImageStyle(uri?: string): string {
-  return uri ? `background-image:url('${uri}');` : '';
+/** fit по умолчанию — 'contain' (не обрезает): в отличие от Obsidian-версии,
+ *  здесь иллюстрацией/фоном очень часто оказывается ГРАФИК (create_png), не
+ *  фото — обрезка по краю отрезает подпись оси/легенду. Модель может явно
+ *  попросить 'cover' для настоящего фото, которому обрезка ради заполнения
+ *  рамки не вредит. См. docs/superpowers/specs/2026-09-06-web-agent-
+ *  presentation-image-fit-design.md. */
+function bgImageStyle(uri?: string, fit: 'cover' | 'contain' = 'contain'): string {
+  if (!uri) return '';
+  if (fit === 'contain') {
+    return `background-image:url('${uri}');background-size:contain;background-repeat:no-repeat;background-position:center;`;
+  }
+  return `background-image:url('${uri}');background-size:cover;background-position:center;`;
 }
 
 function normalizeIllustrationPath(p: unknown): string {
@@ -306,6 +316,10 @@ interface RenderMeta {
   presenter?: string;
   qrDataUri?: string;
   illustrations?: Record<string, string>;
+  /** cover/contain по каждому изображению — ключ 'bg:title'/'bg:{index}' для
+   *  фоновых картинок, сам URL для иллюстраций (illustrations). Нет записи —
+   *  используется дефолт 'contain' (см. bgImageStyle). */
+  imageFit?: Record<string, 'cover' | 'contain'>;
   bgDarken?: Record<string, number>;
   slideIntervalSeconds?: number;
   slideTransition?: 'fade' | 'slide' | 'none';
@@ -335,8 +349,9 @@ function renderSlide(
     ? `<div class="hd"><span class="l1">${escapeHtml(upper(slide.heading1, f.uppercase ?? true))}</span>${slide.heading2 ? `<br><span class="l2">${escapeHtml(upper(slide.heading2, f.uppercase ?? true))}</span>` : ''}</div>`
     : '';
   const illUri = resolveIllustration(slide.imagePath, meta?.illustrations || {});
+  const illFit = illUri ? (meta?.imageFit?.[illUri] ?? 'contain') : 'contain';
   const illHtml = illUri
-    ? `<div class="ill"><img src="${illUri}" alt=""></div>`
+    ? `<div class="ill"><img src="${illUri}" alt="" style="object-fit:${illFit};${illFit === 'contain' ? 'background:#fff;' : ''}"></div>`
     : '';
   const illCls = illUri ? ' has-ill' : '';
 
@@ -347,8 +362,9 @@ function renderSlide(
       const gradient = title.bgStyle === 'gradient' && title.gradient ? title.gradient : '';
       const overlay = bgUri && gradient ? gradient.replace(/rgba\(16,20,30,(\.\d+|0)\)/g, 'rgba(16,20,30,.25)') : gradient;
       const titleDarken = meta?.bgDarken?.['bg:title'] ?? title.overlayOpacity;
+      const titleFit = meta?.imageFit?.['bg:title'] ?? 'contain';
       return `<div class="slide s-title">
-        ${bgUri ? `<div class="t-img" style="${bgImageStyle(bgUri)}"></div>` : ''}
+        ${bgUri ? `<div class="t-img" style="${bgImageStyle(bgUri, titleFit)}"></div>` : ''}
         ${overlay ? `<div class="t-overlay" style="background:${overlay};"></div>` : ''}
         ${titleDarken !== undefined ? `<div class="t-overlay" style="background:rgba(0,0,0,${titleDarken});"></div>` : ''}
         ${title.brand ? `<div class="t-brand">${escapeHtml(title.brand)}</div>` : ''}
@@ -364,10 +380,11 @@ function renderSlide(
       const bgUri = images[`bg:${index}`];
       const heading = upper(slide.heading1 || slide.subtitle || '', f.uppercase ?? true);
       const secDarken = meta?.bgDarken?.[`bg:${index}`];
+      const secFit = meta?.imageFit?.[`bg:${index}`] ?? 'contain';
       const secImgStyle = bgUri
         ? (secDarken !== undefined
-          ? `background-image:linear-gradient(rgba(0,0,0,${secDarken}),rgba(0,0,0,${secDarken})),url('${bgUri}');`
-          : bgImageStyle(bgUri))
+          ? `background-image:linear-gradient(rgba(0,0,0,${secDarken}),rgba(0,0,0,${secDarken})),url('${bgUri}');background-size:${secFit};background-repeat:no-repeat;background-position:center;`
+          : bgImageStyle(bgUri, secFit))
         : '';
       return `<div class="slide s-section">
         ${secImgStyle ? `<div class="sec-img" style="${secImgStyle}"></div>` : `<div class="sec-img"></div>`}
@@ -383,7 +400,8 @@ function renderSlide(
         `<div class="bullet"><span class="mark"></span><span class="bt">${escapeHtml(b)}</span></div>`).join('');
       const bgUri = images[`bg:${index}`];
       const darken = meta?.bgDarken?.[`bg:${index}`];
-      return `<div class="slide s-content${illCls}" ${bgUri ? `style="${bgImageStyle(bgUri)}"` : ''}>
+      const fit = meta?.imageFit?.[`bg:${index}`] ?? 'contain';
+      return `<div class="slide s-content${illCls}" ${bgUri ? `style="${bgImageStyle(bgUri, fit)}"` : ''}>
         ${darken !== undefined && bgUri ? `<div class="s-bg-dark" style="background:rgba(0,0,0,${darken});"></div>` : ''}
         ${hd}
         <div class="body-bullets">${bulletsHtml}</div>
@@ -400,7 +418,8 @@ function renderSlide(
       const gridStyle = `grid-template-columns:repeat(${gridCols},1fr);grid-template-rows:repeat(${gridRows},1fr);`;
       const bgUri = images[`bg:${index}`];
       const darken = meta?.bgDarken?.[`bg:${index}`];
-      return `<div class="slide s-content${illCls}" ${bgUri ? `style="${bgImageStyle(bgUri)}"` : ''}>
+      const fit = meta?.imageFit?.[`bg:${index}`] ?? 'contain';
+      return `<div class="slide s-content${illCls}" ${bgUri ? `style="${bgImageStyle(bgUri, fit)}"` : ''}>
         ${darken !== undefined && bgUri ? `<div class="s-bg-dark" style="background:rgba(0,0,0,${darken});"></div>` : ''}
         ${hd}
         <div class="cards-grid" style="${gridStyle}">${cardsHtml}</div>
@@ -417,7 +436,8 @@ function renderSlide(
         `<tr>${row.map((cell, ci) => `<td${ci === highlightIdx ? ' class="hl"' : ''}>${escapeHtml(cell)}</td>`).join('')}</tr>`).join('');
       const bgUri = images[`bg:${index}`];
       const darken = meta?.bgDarken?.[`bg:${index}`];
-      return `<div class="slide s-content${illCls}" ${bgUri ? `style="${bgImageStyle(bgUri)}"` : ''}>
+      const fit = meta?.imageFit?.[`bg:${index}`] ?? 'contain';
+      return `<div class="slide s-content${illCls}" ${bgUri ? `style="${bgImageStyle(bgUri, fit)}"` : ''}>
         ${darken !== undefined && bgUri ? `<div class="s-bg-dark" style="background:rgba(0,0,0,${darken});"></div>` : ''}
         ${hd}
         <div class="tbl-wrap"><table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></div>
@@ -436,7 +456,8 @@ function renderSlide(
       const photoDarken = meta?.bgDarken?.[`bg:${index}`];
       const overlayBg = photoDarken !== undefined ? `rgba(0,0,0,${photoDarken})` : (photo.overlay ?? 'rgba(16,20,30,.6)');
       const overlayHtml = bgUri ? `<div class="p-overlay" style="background:${overlayBg};"></div>` : '';
-      return `<div class="slide s-photo" ${bgUri ? `style="${bgImageStyle(bgUri)}"` : ''}>
+      const photoFit = meta?.imageFit?.[`bg:${index}`] ?? 'contain';
+      return `<div class="slide s-photo" ${bgUri ? `style="${bgImageStyle(bgUri, photoFit)}"` : ''}>
         ${overlayHtml}
         <div class="p-content">
           ${phead}
@@ -453,7 +474,8 @@ function renderSlide(
         : '';
       const bgUri = images[`bg:${index}`];
       const darken = meta?.bgDarken?.[`bg:${index}`];
-      return `<div class="slide s-final" ${bgUri ? `style="${bgImageStyle(bgUri)}"` : ''}>
+      const finFit = meta?.imageFit?.[`bg:${index}`] ?? 'contain';
+      return `<div class="slide s-final" ${bgUri ? `style="${bgImageStyle(bgUri, finFit)}"` : ''}>
         ${darken !== undefined && bgUri ? `<div class="s-bg-dark" style="background:rgba(0,0,0,${darken});"></div>` : ''}
         <div class="fin-block">
           <div class="fin-center">${escapeHtml(upper('Спасибо за внимание', true))}</div>
@@ -635,6 +657,7 @@ export async function buildWebPresentationHtml(
     presenterPhone?: string;
     presenterEmail?: string;
     illustrations?: Record<string, string>;
+    imageFit?: Record<string, 'cover' | 'contain'>;
   } = {},
 ): Promise<string> {
   let qrDataUri: string | undefined;
@@ -653,5 +676,6 @@ export async function buildWebPresentationHtml(
     presenter: opts.presenter,
     qrDataUri,
     illustrations: opts.illustrations,
+    imageFit: opts.imageFit,
   });
 }

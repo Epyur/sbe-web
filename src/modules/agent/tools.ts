@@ -192,6 +192,7 @@ const BACKGROUND_LAYOUTS = new Set(['title', 'section', 'photo', 'final']);
 
 interface PresentationSlideArg extends PresentationSlide {
   image_url?: string;
+  image_fit?: 'cover' | 'contain';
 }
 
 async function createPresentationTool(args: Record<string, unknown>): Promise<ToolCallResult> {
@@ -203,15 +204,19 @@ async function createPresentationTool(args: Record<string, unknown>): Promise<To
 
   const images: Record<string, string> = {};
   const illustrations: Record<string, string> = {};
+  const imageFit: Record<string, 'cover' | 'contain'> = {};
   const slides: PresentationSlide[] = slidesArg.map((s, i) => {
-    const { image_url: imageUrl, ...rest } = s;
+    const { image_url: imageUrl, image_fit: fit, ...rest } = s;
     const slide: PresentationSlide = { ...rest };
     if (imageUrl) {
       if (BACKGROUND_LAYOUTS.has(slide.layout)) {
-        images[slide.layout === 'title' ? 'bg:title' : `bg:${i}`] = imageUrl;
+        const key = slide.layout === 'title' ? 'bg:title' : `bg:${i}`;
+        images[key] = imageUrl;
+        if (fit) imageFit[key] = fit;
       } else {
         illustrations[imageUrl] = imageUrl;
         slide.imagePath = imageUrl;
+        if (fit) imageFit[imageUrl] = fit;
       }
     }
     return slide;
@@ -227,7 +232,7 @@ async function createPresentationTool(args: Record<string, unknown>): Promise<To
       { title, slides },
       DEFAULT_PRESENTATION_TEMPLATE,
       images,
-      { date, presenter, presenterPhone, presenterEmail, illustrations },
+      { date, presenter, presenterPhone, presenterEmail, illustrations, imageFit },
     );
     const blob = new Blob([html], { type: 'text/html' });
     const fileName = title.replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 60) || 'presentation';
@@ -738,8 +743,7 @@ async function readSkillTool(args: Record<string, unknown>): Promise<ToolCallRes
   try {
     const g = await agentApi.getGlobalSkill(name);
     if (!g) return { ok: false, summary: '', error: `Скил «${name}» не найден. Сначала вызовите list_skills.` };
-    const files = g.files.map(f => f.name);
-    return { ok: true, summary: `Глобальный скил «${g.name}» загружен. Следуй его инструкциям.`, data: { name: g.name, skill_md: g.content, files } };
+    return { ok: true, summary: `Глобальный скил «${g.name}» загружен. Следуй его инструкциям.`, data: { name: g.name, skill_md: g.content, files: g.files } };
   } catch (e: unknown) {
     return { ok: false, summary: '', error: errorMessage(e) };
   }
@@ -1298,6 +1302,7 @@ image_url — обычная ссылка (из get_photo_link по фото и�
                   speaker: { type: 'string' },
                   footer: { type: 'string', description: 'Переопределить нижнюю подпись слайда (по умолчанию — дата · название доклада · номер)' },
                   image_url: { type: 'string', description: 'Ссылка на фото (get_photo_link) или график (create_png) для этого слайда' },
+                  image_fit: { type: 'string', enum: ['cover', 'contain'], description: 'Как вписать image_url: "cover" — заполнить всю область, обрезая края (подходит для фото); "contain" — вписать целиком без обрезки (обязательно для графиков/диаграмм, где важны подписи осей и легенда по краям). По умолчанию "contain".' },
                 },
                 required: ['layout'],
               },
@@ -1343,7 +1348,7 @@ image_url — обычная ссылка (из get_photo_link по фото и�
       execute: async () => listSkillsTool(),
     },
     {
-      schema: { name: 'read_skill', description: 'Загрузить инструкции глобального скила (SKILL.md) в контекст.', input_schema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } },
+      schema: { name: 'read_skill', description: 'Загрузить инструкции глобального скила (SKILL.md) и содержимое всех его вспомогательных файлов (data.files[].content) в контекст.', input_schema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } },
       execute: async (_ctx, args) => readSkillTool(args),
     },
     {

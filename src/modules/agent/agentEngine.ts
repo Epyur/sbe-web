@@ -44,6 +44,15 @@ const COMPACTION_SYSTEM_PROMPT = [
  * пустым намеренно: fetch_url НЕ идемпотентен (повтор — зацикливание). */
 const IDEMPOTENT_TOOLS = new Set<string>([]);
 
+/** Структурная защита от «блуждания»: сколько раз подряд можно вызвать ОДИН И
+ * ТОТ ЖЕ инструмент (с ЛЮБЫМИ аргументами) прежде чем принудительно остановить
+ * ход и попросить пользователя уточнить задачу. В отличие от seenCalls (ловит
+ * повтор с ИДЕНТИЧНЫМИ аргументами), это ловит перебор разных запросов одним и
+ * тем же тулом — живой инцидент 2026-09-06: агент 10+ раз подряд менял поисковый
+ * запрос к фотобанку («обложка», «фото», …) вместо того чтобы остановиться и
+ * спросить пользователя, и упёрся в общий лимит шагов без внятного сообщения. */
+const CONSECUTIVE_SAME_TOOL_LIMIT = 5;
+
 export interface RunAgentParams {
   dialog: Dialog;
   userMessage: string;
@@ -153,6 +162,8 @@ export class AgentEngine {
     await this.compactHistoryIfNeeded(params.dialog);
     let transcript = this.serializeHistory(params.dialog);
     const seenCalls = new Map<string, number>();
+    let lastToolName: string | null = null;
+    let consecutiveToolCount = 0;
 
     for (let i = 0; i < this.maxIterations; i++) {
       if (controller.signal.aborted) {
@@ -196,6 +207,17 @@ export class AgentEngine {
         seenCalls.set(callKey, count);
         if (!IDEMPOTENT_TOOLS.has(turn.tool) && count > 2) {
           params.onAssistant(`Защита от зацикливания: инструмент «${turn.tool}» вызван одинаково ${count} раз. Измените параметры или уточните задачу.`);
+          return;
+        }
+
+        if (turn.tool === lastToolName) {
+          consecutiveToolCount++;
+        } else {
+          lastToolName = turn.tool;
+          consecutiveToolCount = 1;
+        }
+        if (!IDEMPOTENT_TOOLS.has(turn.tool) && consecutiveToolCount > CONSECUTIVE_SAME_TOOL_LIMIT) {
+          params.onAssistant(`Не получилось подобрать нужный результат: инструмент «${turn.tool}» вызван ${consecutiveToolCount} раз подряд с разными параметрами. Уточните, пожалуйста, задачу — что именно нужно найти или построить?`);
           return;
         }
 
