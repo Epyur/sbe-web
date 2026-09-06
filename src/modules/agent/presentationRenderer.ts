@@ -193,12 +193,15 @@ function buildCss(tpl: PresentationTemplate, transition: 'fade' | 'slide' | 'non
 
   /* ---------- Section / шмуцтитул ---------- */
   .s-section { background:${section.bg ?? c.bg ?? '#fff'}; }
-  .s-section .sec-body { position:absolute; inset:0; display:grid; grid-template-columns:1fr 1fr; }
   .s-section .sec-img {
+    position:absolute; left:0; top:0; width:50%; height:100%;
     background-size:cover; background-position:center; background-color:${c.light};
     border-right:1px solid ${c.border};
   }
-  .s-section .sec-txt { display:flex; flex-direction:column; justify-content:center; padding:0 4.45cqw; }
+  .s-section .sec-txt {
+    position:absolute; left:50%; top:0; width:50%; height:100%;
+    display:flex; flex-direction:column; justify-content:center; padding:0 4.45cqw;
+  }
   .s-section .h1 {
     font-family:"${f.title}", Arial Black, sans-serif; color:${section.accentColor ?? c.accent};
     font-size:${headerSize}cqw; line-height:1.15; ${up} margin-bottom:2cqh;
