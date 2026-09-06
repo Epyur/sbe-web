@@ -268,3 +268,67 @@ export async function readScratchRecords(key: string): Promise<{ records: unknow
     headers: await authHeader(),
   });
 }
+
+// ================= ЮГайл (agent-service — прокси, без CORS-проблемы браузера) =================
+// Пароль ЮГайла и обмен на ключ — целиком на сервере (agent-service); сюда
+// приходят уже готовые данные ЮГайла. Удаления здесь нет ни одного метода —
+// см. docs/superpowers/specs/2026-09-06-web-agent-yougile-design.md.
+
+export async function getYougileTasks(filter: { columnId?: string; assignedTo?: string }): Promise<Record<string, unknown>[]> {
+  const params = new URLSearchParams();
+  if (filter.columnId) params.set('columnId', filter.columnId);
+  if (filter.assignedTo) params.set('assignedTo', filter.assignedTo);
+  const qs = params.toString();
+  const data = await requestJSON<{ content?: Record<string, unknown>[] }>(
+    `${API_BASE}/api/agent/yougile/tasks${qs ? `?${qs}` : ''}`,
+    { headers: await authHeader(), timeoutMs: 60000 },
+  );
+  return Array.isArray(data.content) ? data.content : [];
+}
+
+export interface YougileBoardTree {
+  projects: Record<string, unknown>[];
+  boards: Record<string, unknown>[];
+  columns: Record<string, unknown>[];
+  users: Record<string, unknown>[];
+}
+
+/** Справочники проект/доска/колонка/пользователь одним вызовом — для
+ * сопоставления имён → id при создании задачи/смене статуса. */
+export async function getYougileBoardTree(): Promise<YougileBoardTree> {
+  return requestJSON<YougileBoardTree>(`${API_BASE}/api/agent/yougile/board-tree`, {
+    headers: await authHeader(), timeoutMs: 60000,
+  });
+}
+
+export async function createYougileTask(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+  return requestJSON<Record<string, unknown>>(`${API_BASE}/api/agent/yougile/tasks`, {
+    method: 'POST',
+    headers: await jsonHeaders(),
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function setYougileTaskStatus(taskId: string, columnId: string): Promise<void> {
+  const res = await apiRequest(`${API_BASE}/api/agent/yougile/tasks/${encodeURIComponent(taskId)}/status`, {
+    method: 'PUT',
+    headers: await jsonHeaders(),
+    body: JSON.stringify({ columnId }),
+  });
+  await assertOk(res);
+}
+
+/** Сообщение в чат задачи + необязательный файл (встраивается сервером как
+ * ссылка/картинка в текст — в API ЮГайла нет отдельного поля «вложение»). */
+export async function addYougileTaskMessage(taskId: string, text: string, file?: File): Promise<void> {
+  const form = new FormData();
+  form.set('text', text);
+  if (file) form.set('file', file, file.name);
+  const res = await apiRequest(`${API_BASE}/api/agent/yougile/tasks/${encodeURIComponent(taskId)}/message`, {
+    method: 'POST',
+    headers: await authHeader(), // без Content-Type — границу multipart проставит браузер
+    body: form,
+    timeoutMs: 60000,
+  });
+  await assertOk(res);
+}

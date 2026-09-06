@@ -353,9 +353,14 @@ async function getPhotosTool(args: Record<string, unknown>): Promise<ToolCallRes
     const query = String(args.query || '').trim();
     const kind = String(args.kind || '').trim();
     const limit = Number(args.limit) || 20;
+    const id = Number(args.id) || 0;
     let items = await agentApi.getPhotos();
-    if (kind) items = items.filter(i => str(i.kind).toLowerCase() === kind.toLowerCase());
-    if (query) {
+    if (id > 0) {
+      items = items.filter(i => Number(i.id) === id);
+    } else if (kind) {
+      items = items.filter(i => str(i.kind).toLowerCase() === kind.toLowerCase());
+    }
+    if (query && id <= 0) {
       const q = query.toLowerCase();
       items = items.filter(i => Object.entries(i).some(([k, v]) => {
         if (k === 'custom') return false;
@@ -384,6 +389,101 @@ async function getPhotoLinkTool(args: Record<string, unknown>): Promise<ToolCall
       summary: 'Ссылка на файл получена — пользователю показана кнопка «Открыть фото» (действует ~7 дней). Скажи пользователю, что можно открыть фото кнопкой в сообщении тула; НЕ вставляй длинный URL в текст ответа.',
       link: { url, label: '🖼 Открыть фото' },
       data: { url },
+    };
+  } catch (e: unknown) {
+    return { ok: false, summary: '', error: errorMessage(e) };
+  }
+}
+
+// ================= ЮГайл (agent-service — прокси, без CORS-проблемы браузера) =================
+// Пароль ЮГайла и обмен на ключ — целиком на сервере (agent-service, см.
+// agentApi.ts); тулы здесь только формируют/фильтруют данные для модели.
+// Удаления НЕТ ни одного тула — ни задач, ни досок, ни проектов, категорически
+// запрещено пользователем. См. docs/superpowers/specs/
+// 2026-09-06-web-agent-yougile-design.md.
+
+async function getYougileTasksTool(args: Record<string, unknown>): Promise<ToolCallResult> {
+  try {
+    const query = String(args.query || '').trim().toLowerCase();
+    const columnId = String(args.column_id || '').trim();
+    const assignedTo = String(args.assigned_to || '').trim();
+    const limit = Math.max(1, Math.min(Number(args.limit) || 30, 200));
+    let items = await agentApi.getYougileTasks({ columnId, assignedTo });
+    if (query) {
+      items = items.filter(t => Object.values(t).some(v => typeof v === 'string' && v.toLowerCase().includes(query)));
+    }
+    const picked = items.slice(0, limit);
+    return {
+      ok: true,
+      summary: `ЮГайл: найдено задач ${items.length}, показано ${picked.length}.`,
+      data: { total: items.length, items: picked },
+    };
+  } catch (e: unknown) {
+    return { ok: false, summary: '', error: errorMessage(e) };
+  }
+}
+
+async function getYougileBoardTreeTool(): Promise<ToolCallResult> {
+  try {
+    const tree = await agentApi.getYougileBoardTree();
+    return {
+      ok: true,
+      summary: `ЮГайл: проектов ${tree.projects.length}, досок ${tree.boards.length}, колонок ${tree.columns.length}, пользователей ${tree.users.length}. Используй id колонки для создания задачи (create_yougile_task) и смены статуса (set_yougile_task_status).`,
+      data: tree,
+    };
+  } catch (e: unknown) {
+    return { ok: false, summary: '', error: errorMessage(e) };
+  }
+}
+
+async function createYougileTaskTool(args: Record<string, unknown>): Promise<ToolCallResult> {
+  const title = String(args.title || '').trim();
+  const columnId = String(args.column_id || '').trim();
+  if (!title || !columnId) {
+    return { ok: false, summary: '', error: 'Требуются поля title и column_id (узнай id колонки через get_yougile_board_tree).' };
+  }
+  try {
+    const payload: Record<string, unknown> = { title, columnId };
+    const description = String(args.description || '').trim();
+    if (description) payload.description = description;
+    if (Array.isArray(args.assigned)) payload.assigned = args.assigned.map(String);
+    const task = await agentApi.createYougileTask(payload);
+    return {
+      ok: true,
+      summary: `ЮГайл: задача «${title}» создана (id ${String(task.id || '?')}).`,
+      data: task,
+    };
+  } catch (e: unknown) {
+    return { ok: false, summary: '', error: errorMessage(e) };
+  }
+}
+
+async function setYougileTaskStatusTool(args: Record<string, unknown>): Promise<ToolCallResult> {
+  const taskId = String(args.task_id || '').trim();
+  const columnId = String(args.column_id || '').trim();
+  if (!taskId || !columnId) {
+    return { ok: false, summary: '', error: 'Требуются поля task_id и column_id (узнай id колонки через get_yougile_board_tree).' };
+  }
+  try {
+    await agentApi.setYougileTaskStatus(taskId, columnId);
+    return { ok: true, summary: `ЮГайл: статус задачи ${taskId} изменён.`, data: { task_id: taskId, column_id: columnId } };
+  } catch (e: unknown) {
+    return { ok: false, summary: '', error: errorMessage(e) };
+  }
+}
+
+async function addYougileTaskMessageTool(args: Record<string, unknown>, attachment: AgentAttachment | null): Promise<ToolCallResult> {
+  const taskId = String(args.task_id || '').trim();
+  const text = String(args.text || '').trim();
+  if (!taskId) return { ok: false, summary: '', error: 'Требуется поле task_id.' };
+  if (!text && !attachment) return { ok: false, summary: '', error: 'Нужен текст (text) или прикреплённый пользователем файл.' };
+  try {
+    const file = attachment ? new File([attachment.data], attachment.name) : undefined;
+    await agentApi.addYougileTaskMessage(taskId, text, file);
+    return {
+      ok: true,
+      summary: `ЮГайл: сообщение в чат задачи ${taskId} отправлено${attachment ? ` (с файлом «${attachment.name}»)` : ''}.`,
+      data: { task_id: taskId },
     };
   } catch (e: unknown) {
     return { ok: false, summary: '', error: errorMessage(e) };
@@ -853,8 +953,8 @@ export function createTools(): AgentTool[] {
     {
       schema: {
         name: 'get_photos',
-        description: 'Поиск фотографий в корпоративном фотобанке (доступен, если у пользователя есть права на плагин «Фотобанк»). Ищи по описанию/тегам/названию папки. Возвращает карточки: title, description, tags, folder_name, file_key и др.',
-        input_schema: { type: 'object', properties: { query: { type: 'string' }, kind: { type: 'string', enum: ['image', 'video', 'raw'] }, limit: { type: 'number', description: 'По умолчанию 20, максимум 200' } } },
+        description: 'Поиск фотографий в корпоративном фотобанке (доступен, если у пользователя есть права на плагин «Фотобанк»). Ищи по описанию/тегам/названию папки. Возвращает карточки: id, title, description, tags, folder_name, file_key и др. Если пользователь сам назвал id фото — передай его в поле id для точного поиска вместо query.',
+        input_schema: { type: 'object', properties: { query: { type: 'string' }, kind: { type: 'string', enum: ['image', 'video', 'raw'] }, limit: { type: 'number', description: 'По умолчанию 20, максимум 200' }, id: { type: 'number', description: 'Точный id фото, если пользователь явно его назвал — возвращает только эту карточку, query/kind игнорируются' } } },
       },
       execute: async (_ctx, args) => getPhotosTool(args),
     },
@@ -865,6 +965,77 @@ export function createTools(): AgentTool[] {
         input_schema: { type: 'object', properties: { file_key: { type: 'string' } }, required: ['file_key'] },
       },
       execute: async (_ctx, args) => getPhotoLinkTool(args),
+    },
+    {
+      schema: {
+        name: 'get_yougile_tasks',
+        description: 'Читает задачи ЮГайла (доступно, если у пользователя настроен пароль ЮГайла в настройках веб-портала). Возвращает сырые карточки задач ЮГайла (id, title, description, columnId, assigned, deadline и др.). Фильтруй по тексту через query (ищет по всем строковым полям) или по column_id/assigned_to, если уже знаешь id.',
+        input_schema: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Поиск по всем текстовым полям задачи (название, описание и т.п.)' },
+            column_id: { type: 'string', description: 'id колонки ЮГайла (узнать через get_yougile_board_tree)' },
+            assigned_to: { type: 'string', description: 'id исполнителя ЮГайла (узнать через get_yougile_board_tree)' },
+            limit: { type: 'number', description: 'По умолчанию 30, максимум 200' },
+          },
+        },
+      },
+      execute: async (_ctx, args) => getYougileTasksTool(args),
+    },
+    {
+      schema: {
+        name: 'get_yougile_board_tree',
+        description: 'Справочники ЮГайла одним вызовом: проекты, доски, колонки, пользователи (id + название/email каждого). Вызывай перед create_yougile_task/set_yougile_task_status, чтобы сопоставить название доски/колонки/исполнителя, названное пользователем, с нужным id.',
+        input_schema: { type: 'object', properties: {} },
+      },
+      execute: async () => getYougileBoardTreeTool(),
+    },
+    {
+      schema: {
+        name: 'create_yougile_task',
+        description: 'Создать новую задачу в ЮГайле в указанной колонке. Сначала вызови get_yougile_board_tree, чтобы узнать column_id нужной доски/колонки (и id исполнителя, если пользователь назвал его по имени).',
+        input_schema: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', description: 'Название задачи' },
+            column_id: { type: 'string', description: 'id колонки ЮГайла, куда поместить задачу (из get_yougile_board_tree)' },
+            description: { type: 'string', description: 'Описание задачи (необязательно)' },
+            assigned: { type: 'array', items: { type: 'string' }, description: 'id исполнителей ЮГайла (необязательно, из get_yougile_board_tree)' },
+          },
+          required: ['title', 'column_id'],
+        },
+      },
+      execute: async (_ctx, args) => createYougileTaskTool(args),
+    },
+    {
+      schema: {
+        name: 'set_yougile_task_status',
+        description: 'Сменить статус задачи ЮГайла — в ЮГайле статус это колонка, к которой относится задача. Узнай column_id нужного статуса через get_yougile_board_tree.',
+        input_schema: {
+          type: 'object',
+          properties: {
+            task_id: { type: 'string', description: 'id задачи (из get_yougile_tasks)' },
+            column_id: { type: 'string', description: 'id колонки-статуса, куда перенести задачу (из get_yougile_board_tree)' },
+          },
+          required: ['task_id', 'column_id'],
+        },
+      },
+      execute: async (_ctx, args) => setYougileTaskStatusTool(args),
+    },
+    {
+      schema: {
+        name: 'add_yougile_task_message',
+        description: 'Добавить сообщение (и/или файл, если пользователь его прикрепил в чате) в чат конкретной задачи ЮГайла.',
+        input_schema: {
+          type: 'object',
+          properties: {
+            task_id: { type: 'string', description: 'id задачи (из get_yougile_tasks)' },
+            text: { type: 'string', description: 'Текст сообщения' },
+          },
+          required: ['task_id'],
+        },
+      },
+      execute: async (_ctx, args, attachment) => addYougileTaskMessageTool(args, attachment),
     },
     {
       schema: {
