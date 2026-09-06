@@ -236,13 +236,13 @@ function buildCss(tpl: PresentationTemplate, transition: 'fade' | 'slide' | 'non
   }
   .s-content .card .card-b { color:${cards.textColor ?? c.dark}; font-size:${cqw(12)}; line-height:1.3; }
   .s-content table { border-collapse:collapse; width:100%; }
-  .s-content .tbl-wrap { position:absolute; left:4.45cqw; top:24cqh; right:4.45cqw; }
+  .s-content .tbl-wrap { position:absolute; left:4.45cqw; top:24cqh; right:4.45cqw; bottom:10cqh; overflow:hidden; }
   .s-content th {
     background:${table.headerFill ?? c.dark}; color:${table.headerText ?? c.white};
-    font-family:"${f.title}", Arial Black, sans-serif; font-size:${cqw(12)}; text-align:left;
-    padding:0.8cqw 0.9cqw;
+    font-family:"${f.title}", Arial Black, sans-serif; font-size:calc(${cqw(12)} * var(--tbl-scale, 1)); text-align:left;
+    padding:calc(0.8cqw * var(--tbl-scale, 1)) calc(0.9cqw * var(--tbl-scale, 1));
   }
-  .s-content td { padding:0.8cqw 0.9cqw; font-size:${cqw(12)}; color:${table.textColor ?? c.dark}; }
+  .s-content td { padding:calc(0.8cqw * var(--tbl-scale, 1)) calc(0.9cqw * var(--tbl-scale, 1)); font-size:calc(${cqw(12)} * var(--tbl-scale, 1)); color:${table.textColor ?? c.dark}; }
   .s-content tr:nth-child(odd) td { background:${table.altRowFill ?? c.light}; }
   .s-content td.hl {
     color:${c.accent}; font-family:"${f.title}", Arial Black, sans-serif; font-weight:bold;
@@ -437,13 +437,22 @@ function renderSlide(
       const head = t.headers.map(h => `<th>${escapeHtml(h)}</th>`).join('');
       const rows = t.rows.map(row =>
         `<tr>${row.map((cell, ci) => `<td${ci === highlightIdx ? ' class="hl"' : ''}>${escapeHtml(cell)}</td>`).join('')}</tr>`).join('');
+      // Строки без явного лимита ломались об футер (не помещались в отведённую
+      // область) — тело таблицы масштабируется вниз, если строк больше, чем
+      // помещается при обычном размере (см. живой инцидент 2026-09-06:
+      // регенерация той же презентации с 13 исполнителями вместо 9 сдвинула
+      // последнюю строку поверх футера).
+      const SAFE_TABLE_ROWS = 9;
+      const tblScale = t.rows.length > SAFE_TABLE_ROWS
+        ? Math.max(0.55, SAFE_TABLE_ROWS / t.rows.length)
+        : 1;
       const bgUri = images[`bg:${index}`];
       const darken = meta?.bgDarken?.[`bg:${index}`];
       const fit = meta?.imageFit?.[`bg:${index}`] ?? 'contain';
       return `<div class="slide s-content${illCls}" ${bgUri ? `style="${bgImageStyle(bgUri, fit)}"` : ''}>
         ${darken !== undefined && bgUri ? `<div class="s-bg-dark" style="background:rgba(0,0,0,${darken});"></div>` : ''}
         ${hd}
-        <div class="tbl-wrap"><table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></div>
+        <div class="tbl-wrap" style="--tbl-scale:${tblScale.toFixed(2)};"><table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></div>
         ${illHtml}
         ${footHtml}
       </div>`;

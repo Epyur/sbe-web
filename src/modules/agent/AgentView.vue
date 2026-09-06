@@ -112,6 +112,24 @@ function persistDialog(dialog: Dialog): void {
   });
 }
 
+/** Разовое восстановление названия для уже существующих диалогов, застрявших
+ * на дефолтном «Новый диалог» (баг — переименование по первому сообщению
+ * никогда не было портировано из Obsidian-плагина, см. AGENTS.md). Новые
+ * диалоги переименовываются сразу при отправке (см. sendMessage). */
+function fixUntitledDialogs(list: Dialog[]): void {
+  for (const d of list) {
+    if (d.title !== 'Новый диалог') continue;
+    const firstUser = d.messages.find(m => m.role === 'user');
+    if (!firstUser) continue;
+    const autoTitle = (firstUser.content || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+    if (!autoTitle) continue;
+    d.title = autoTitle;
+    agentApi.saveDialog(d).catch((e: unknown) => {
+      console.warn('LogicTEAM.007: не удалось сохранить восстановленное название диалога:', errorMessage(e));
+    });
+  }
+}
+
 async function loadAll(): Promise<void> {
   loading.value = true;
   error.value = '';
@@ -121,6 +139,7 @@ async function loadAll(): Promise<void> {
       llmApi.listModels().catch(() => [] as LlmModel[]),
     ]);
     dialogs.value = history;
+    fixUntitledDialogs(history);
     models.value = modelList;
     if (modelList.length > 0) {
       let saved = '';
@@ -209,6 +228,10 @@ async function sendMessage(): Promise<void> {
     created_at: new Date().toISOString(),
   };
   dialog.messages.push(userMessage);
+  if (dialog.title === 'Новый диалог') {
+    const autoTitle = text.replace(/\s+/g, ' ').trim().slice(0, 40);
+    if (autoTitle) dialog.title = autoTitle;
+  }
   persistDialog(dialog);
 
   inputText.value = '';
