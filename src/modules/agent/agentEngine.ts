@@ -206,7 +206,8 @@ export class AgentEngine {
         const count = (seenCalls.get(callKey) || 0) + 1;
         seenCalls.set(callKey, count);
         if (!IDEMPOTENT_TOOLS.has(turn.tool) && count > 2) {
-          params.onAssistant(`Защита от зацикливания: инструмент «${turn.tool}» вызван одинаково ${count} раз. Измените параметры или уточните задачу.`);
+          await this.finishWithSynthesis(transcript, system, params, controller,
+            `Защита от зацикливания: инструмент «${turn.tool}» вызван одинаково ${count} раз.`);
           return;
         }
 
@@ -217,7 +218,8 @@ export class AgentEngine {
           consecutiveToolCount = 1;
         }
         if (!IDEMPOTENT_TOOLS.has(turn.tool) && consecutiveToolCount > CONSECUTIVE_SAME_TOOL_LIMIT) {
-          params.onAssistant(`Не получилось подобрать нужный результат: инструмент «${turn.tool}» вызван ${consecutiveToolCount} раз подряд с разными параметрами. Уточните, пожалуйста, задачу — что именно нужно найти или построить?`);
+          await this.finishWithSynthesis(transcript, system, params, controller,
+            `Не получилось подобрать нужный результат: инструмент «${turn.tool}» вызван ${consecutiveToolCount} раз подряд с разными параметрами.`);
           return;
         }
 
@@ -230,7 +232,31 @@ export class AgentEngine {
       }
     }
 
-    params.onAssistant(`Превышено число шагов агента (${this.maxIterations}). Попробуйте сформулировать задачу более конкретно.`);
+    await this.finishWithSynthesis(transcript, system, params, controller,
+      `Превышено число шагов агента (${this.maxIterations}).`);
+  }
+
+  /** Вместо того чтобы просто оборвать ход общей фразой (пользователь не видел
+   * ничего из уже реально найденных данных, хотя тулы отработали) — даём модели
+   * ОДИН последний ход без доступа к тулам: собрать ответ из того, что уже есть
+   * в транскрипте. Живой инцидент 2026-09-06: get_documents вернул 11+82+11
+   * реальных документов за 4 вызова, но анти-луп-гард оборвал ход раньше, чем
+   * модель успела на их основе что-то ответить — пользователь не увидел ни
+   * одного из уже найденных документов. */
+  private async finishWithSynthesis(
+    transcript: string, system: string, params: RunAgentParams, controller: AbortController, reason: string,
+  ): Promise<void> {
+    if (controller.signal.aborted) { params.onAssistant('Остановлено пользователем.'); return; }
+    const note = `\n[Система] ${reason} Дальнейшие вызовы инструментов недоступны. Сформулируй итоговый ответ пользователю ТОЛЬКО на основе данных, уже полученных выше в этом диалоге (результаты тулов) — не выдумывай новые данные. Если реально ничего полезного не найдено — честно скажи об этом и предложи, как уточнить запрос. Ответь обычным текстом, без JSON.\n`;
+    try {
+      const raw = await llmApi.complete(system, transcript + note, params.model ? { model: params.model } : undefined, controller.signal);
+      const turns = this.parseTurns(raw);
+      const finalTurn = turns.find(t => t.type === 'final');
+      params.onAssistant((finalTurn?.text || '').trim() || reason);
+    } catch (e: unknown) {
+      if (e instanceof AbortedByUserError) { params.onAssistant('Остановлено пользователем.'); return; }
+      params.onAssistant(reason);
+    }
   }
 
   /** Ленивый разбор хода LLM: все подряд идущие JSON-объекты (tool_call/final) +
