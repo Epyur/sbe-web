@@ -54,6 +54,54 @@
 
 ## История работ
 
+### 2026-09-06 — v0.1.13 (настоящие презентации + графики через ApexCharts — интеграция sbe-presentations/sbe-dashboards в веб-агента)
+
+Живая жалоба пользователя: два самостоятельных Obsidian-плагина с ИИ
+(`sbe-presentations`, `sbe-dashboards`) не интегрированы в веб-агента — просьба
+«сделай презентацию» давала плоский HTML-отчёт, графики рисовались почти без
+контроля внешнего вида. Дизайн: `docs/superpowers/specs/2026-09-06-web-agent-
+chart-rendering-design.md` + `...-presentations-design.md`. Разбор показал:
+единственный глобальный скил с похожим названием (`presentation-creator`)
+оказался про другой формат (React/Vite/Recharts, стиль Sentry) — агент не мог
+им воспользоваться технически, а не «игнорировал» его; графики упирались в
+mermaid `xychart-beta`, у которого физически нет ни легенды, ни подписи оси Y.
+
+- **Графики — `create_png` (ветка `chart`)**: рендер переехал в браузер,
+  **ApexCharts** (порт `chart-builder.ts` из `sbe-dashboards`, новый
+  `modules/agent/chartRenderer.ts`) — offscreen-контейнер, `chart.dataURI()`.
+  Схема тула: `type` расширен до `bar|line|donut|pie|area|scatter` (было
+  `bar|line|pie`), добавлены `legend`/`x_label`/`y_label`. Ветка `mermaid`
+  того же тула не изменилась.
+- **Презентации — новый тул `create_presentation`**: формат слайдов
+  (`title|section|bullets|cards|table|photo|final`) и вся разметка/CSS/JS
+  показа (полноэкранный режим, переходы, автопоказ, печать в PDF, QR
+  докладчика) портированы 1:1 из `sbe-presentations/src/services/
+  presentation-generator.ts` (порт был возможен почти без изменений — та
+  часть уже была чистыми функциями без Obsidian/vault-зависимостей; резолв
+  путей в data URI не понадобился — иллюстрации веб-агента уже обычные HTTPS-
+  ссылки из Фотобанка/`create_png`). Новые файлы: `presentationTypes.ts`,
+  `presentationTemplate.ts` (встроенный шаблон «Технониколь» + дизайн-скил
+  hook/context/journey/solution/evidence/ask — портирован из
+  `DEFAULT_DESIGN_RULES`), `presentationRenderer.ts`. Дизайн-скил встроен
+  прямо в описание тула `create_presentation`, а не через `list_skills` —
+  модель видит его всегда, без похода за скилом и без риска подхватить
+  `presentation-creator`.
+- **Общее хранение отрисованных файлов**: `agentApi.storeClientFile()` →
+  `POST /api/agent/file/store` (`agent-service`, см. его `AGENTS.md`) — один
+  эндпоинт для PNG-графиков и HTML-презентаций, сервер только сохраняет уже
+  готовый файл в S3.
+- **Живой тест перед деплоем** (Playwright, реальный Chromium, dev-сервер,
+  без сети/авторизации — только сам рендеринг): 3 графика (bar с легендой,
+  donut с процентами, line) + презентация из 7 слайдов всех layout с этими
+  графиками как иллюстрациями — визуально подтверждено скриншотами (легенда
+  и подписи осей реально видны на графике внутри слайда; полноэкранный показ
+  с переходами и навигацией работает).
+
+`npx vue-tsc -b && npm run build` — чисто. Версия 0.1.12 → **0.1.13**.
+Сопутствующая правка бэкенда (`agent-service`: `client_file_store.go`,
+замена `chart_store.go`) — версия портала не поднимается за неё отдельно,
+см. `sbe-agent/agent-service/AGENTS.md` (запись 2026-09-06).
+
 ### 2026-09-06 — v0.1.12 (защита от раздувания контекста диалога агента)
 
 Дизайн: `docs/superpowers/specs/2026-09-06-web-agent-context-compaction-design.md`.

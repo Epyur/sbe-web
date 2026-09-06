@@ -2,6 +2,10 @@ import type { AgentToolSchema, ToolCallResult, SourceAvailability, FileGenerateR
 import { errorMessage } from '../../api/http';
 import * as agentApi from '../../api/agentApi';
 import { API_MANIFEST } from './apiManifest';
+import { renderChartToDataUrl, dataUrlToBlob, type ChartRenderType } from './chartRenderer';
+import { buildWebPresentationHtml } from './presentationRenderer';
+import { DEFAULT_PRESENTATION_TEMPLATE, PRESENTATION_DESIGN_RULES } from './presentationTemplate';
+import type { PresentationSlide } from './presentationTypes';
 
 /**
  * Реестр тулов веб-агента — порт sbe-agent/src/agent/tools-registry.ts + tools/*.ts.
@@ -120,6 +124,121 @@ async function generateFileTool(format: string, spec: Record<string, unknown>, l
       if (data.extra.mmd) summary += `\nИсходник mermaid (.mmd): ${data.extra.mmd}`;
     }
     return { ok: true, summary, link: { url: data.url, label: `⬇ Скачать файл ${label}` }, data };
+  } catch (e: unknown) {
+    return { ok: false, summary: '', error: errorMessage(e) };
+  }
+}
+
+// ================= create_png (chart) — рендер в браузере через ApexCharts =================
+// Рендер (тип/легенда/подписи осей) теперь делает клиент, не сервер через
+// mermaid — mermaid xychart-beta физически не умеет ни легенду, ни подпись
+// оси Y. См. docs/superpowers/specs/2026-09-06-web-agent-chart-rendering-design.md.
+
+const VALID_CHART_TYPES = new Set<ChartRenderType>(['bar', 'line', 'donut', 'pie', 'area', 'scatter']);
+
+async function renderChartTool(chart: Record<string, unknown>): Promise<ToolCallResult> {
+  const typeArg = String(chart.type || 'bar').trim() as ChartRenderType;
+  const chartType: ChartRenderType = VALID_CHART_TYPES.has(typeArg) ? typeArg : 'bar';
+  const title = String(chart.title || 'График').trim();
+  const legend = chart.legend === undefined ? true : Boolean(chart.legend);
+  const xLabel = typeof chart.x_label === 'string' ? chart.x_label.trim() || undefined : undefined;
+  const yLabel = typeof chart.y_label === 'string' ? chart.y_label.trim() || undefined : undefined;
+
+  let categories: string[];
+  let series: { name: string; data: number[] }[];
+  if (Array.isArray(chart.data) && chart.data.length > 0) {
+    const points = chart.data as Array<{ label?: unknown; value?: unknown }>;
+    categories = points.map(p => String(p.label ?? ''));
+    series = [{ name: title, data: points.map(p => Number(p.value) || 0) }];
+  } else if (Array.isArray(chart.categories) && Array.isArray(chart.series)) {
+    categories = (chart.categories as unknown[]).map(String);
+    series = (chart.series as Array<{ name?: unknown; values?: unknown[] }>).map(s => ({
+      name: String(s.name || ''),
+      data: Array.isArray(s.values) ? s.values.map(Number) : [],
+    }));
+  } else {
+    return { ok: false, summary: '', error: 'Требуется chart.data ({label,value}[]) или chart.categories + chart.series.' };
+  }
+  if (series.length === 0 || series.every(s => s.data.length === 0)) {
+    return { ok: false, summary: '', error: 'Нет данных для графика.' };
+  }
+  if ((chartType === 'donut' || chartType === 'pie') && series.length !== 1) {
+    return { ok: false, summary: '', error: 'Для donut/pie нужен ровно один ряд (chart.data, не несколько series).' };
+  }
+
+  try {
+    const dataUrl = await renderChartToDataUrl({ chartType, title, categories, series, xLabel, yLabel, legend });
+    const blob = dataUrlToBlob(dataUrl);
+    const fileName = title.replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 60) || 'chart';
+    const result = await agentApi.storeClientFile(blob, fileName, '.png');
+    const until = new Date(result.expires_at).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    return {
+      ok: true,
+      summary: `График «${title}» (${chartType}) сформирован. Скачивание доступно до ${until}.`,
+      link: { url: result.url, label: '📊 Открыть график' },
+      data: result,
+    };
+  } catch (e: unknown) {
+    return { ok: false, summary: '', error: errorMessage(e) };
+  }
+}
+
+// ================= create_presentation =================
+// Реальный формат слайдов sbe-presentations (не плоский HTML-отчёт) — порт
+// presentation-generator.ts, рендерится в браузере. См. docs/superpowers/
+// specs/2026-09-06-web-agent-presentations-design.md.
+
+const BACKGROUND_LAYOUTS = new Set(['title', 'section', 'photo', 'final']);
+
+interface PresentationSlideArg extends PresentationSlide {
+  image_url?: string;
+}
+
+async function createPresentationTool(args: Record<string, unknown>): Promise<ToolCallResult> {
+  const title = String(args.title || '').trim();
+  const slidesArg = Array.isArray(args.slides) ? (args.slides as PresentationSlideArg[]) : [];
+  if (!title || slidesArg.length === 0) {
+    return { ok: false, summary: '', error: 'Требуются title и непустой slides.' };
+  }
+
+  const images: Record<string, string> = {};
+  const illustrations: Record<string, string> = {};
+  const slides: PresentationSlide[] = slidesArg.map((s, i) => {
+    const { image_url: imageUrl, ...rest } = s;
+    const slide: PresentationSlide = { ...rest };
+    if (imageUrl) {
+      if (BACKGROUND_LAYOUTS.has(slide.layout)) {
+        images[slide.layout === 'title' ? 'bg:title' : `bg:${i}`] = imageUrl;
+      } else {
+        illustrations[imageUrl] = imageUrl;
+        slide.imagePath = imageUrl;
+      }
+    }
+    return slide;
+  });
+
+  const presenter = String(args.presenter || '').trim() || undefined;
+  const presenterPhone = String(args.presenter_phone || '').trim() || undefined;
+  const presenterEmail = String(args.presenter_email || '').trim() || undefined;
+  const date = String(args.date || '').trim() || undefined;
+
+  try {
+    const html = await buildWebPresentationHtml(
+      { title, slides },
+      DEFAULT_PRESENTATION_TEMPLATE,
+      images,
+      { date, presenter, presenterPhone, presenterEmail, illustrations },
+    );
+    const blob = new Blob([html], { type: 'text/html' });
+    const fileName = title.replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 60) || 'presentation';
+    const result = await agentApi.storeClientFile(blob, fileName, '.html');
+    const until = new Date(result.expires_at).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    return {
+      ok: true,
+      summary: `Презентация «${title}» (${slides.length} слайдов) сформирована. Открой ссылку и переключи в режим «Слайды» (⛶ для полноэкранного показа). Доступна до ${until}.`,
+      link: { url: result.url, label: '🖥 Открыть презентацию' },
+      data: result,
+    };
   } catch (e: unknown) {
     return { ok: false, summary: '', error: errorMessage(e) };
   }
@@ -1111,22 +1230,25 @@ export function createTools(): AgentTool[] {
     {
       schema: {
         name: 'create_png',
-        description: 'Сгенерировать PNG-график из данных — сервер сам собирает корректный mermaid-код, ты просто передаёшь числа (никогда не пишешь mermaid-синтаксис вручную, поэтому здесь невозможна ошибка вида несуществующего оператора). Два варианта chart: (1) один ряд — {type, title, data:[{label,value}]}; (2) НЕСКОЛЬКО рядов на общих категориях (например «поступление»/«завершение» по одним и тем же датам, как в data.series из get_lims_requests с group_by) — {title, categories:[подписи оси X], series:[{name, type:"bar"|"line", values:[числа]}]}. Категории — это ровно то, что должно быть подписью оси X: если пользователь просит «только день, без месяца» — передай в categories уже укороченные подписи («01», «02», …), а не полную дату. Есть встроенная защита от бесконечного перегенерирования почти одинакового графика — если требуется всего лишь другая подпись оси X, это одна правка массива categories, не повод вызывать тул больше 2 раз с разным text/заголовком. Возвращается ссылка на скачивание PNG.',
+        description: 'Сгенерировать PNG-график из данных — рендерится в браузере (никогда не пишешь mermaid-синтаксис вручную). Два варианта chart: (1) один ряд — {type, title, data:[{label,value}]} (для donut/pie — ровно этот вариант, один ряд); (2) НЕСКОЛЬКО рядов на общих категориях (например «поступление»/«завершение» по одним и тем же датам, как в data.series из get_lims_requests с group_by) — {title, categories:[подписи оси X], series:[{name, values:[числа]}]}. Категории — это ровно то, что должно быть подписью оси X: если пользователь просит «только день, без месяца» — передай в categories уже укороченные подписи («01», «02», …), а не полную дату. legend/x_label/y_label управляют внешним видом — если пользователь не уточнил, выбирай разумные значения сам (легенда нужна, если рядов/категорий больше одного; подписи осей — по смыслу данных) или спроси, если действительно неочевидно. Есть встроенная защита от бесконечного перегенерирования почти одинакового графика — если требуется всего лишь другая подпись оси X, это одна правка массива categories, не повод вызывать тул больше 2 раз с разным text/заголовком. Возвращается ссылка на скачивание PNG.',
         input_schema: {
           type: 'object',
           properties: {
             chart: {
               type: 'object',
               properties: {
-                type: { type: 'string', enum: ['bar', 'line', 'pie'], description: 'Для одного ряда (data) или тип по умолчанию для рядов series, у которых не задан свой type' },
+                type: { type: 'string', enum: ['bar', 'line', 'donut', 'pie', 'area', 'scatter'], description: 'Тип графика' },
                 title: { type: 'string' },
-                data: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, value: { type: 'number' } } }, description: 'Один ряд: массив {label, value}' },
+                data: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, value: { type: 'number' } } }, description: 'Один ряд: массив {label, value} (обязателен для donut/pie)' },
                 categories: { type: 'array', items: { type: 'string' }, description: 'Подписи оси X для нескольких рядов (см. series) — ровно то, что должно отображаться на графике' },
                 series: {
                   type: 'array',
-                  items: { type: 'object', properties: { name: { type: 'string' }, type: { type: 'string', enum: ['bar', 'line'] }, values: { type: 'array', items: { type: 'number' } } }, required: ['values'] },
+                  items: { type: 'object', properties: { name: { type: 'string' }, values: { type: 'array', items: { type: 'number' } } }, required: ['values'] },
                   description: 'Несколько рядов на общих categories, каждый со своими values той же длины что categories',
                 },
+                legend: { type: 'boolean', description: 'Показывать легенду (по умолчанию true)' },
+                x_label: { type: 'string', description: 'Подпись оси X (необязательно)' },
+                y_label: { type: 'string', description: 'Подпись оси Y (необязательно, не применяется к donut/pie)' },
               },
             },
             mermaid: { type: 'string', description: 'Диаграмма по готовому mermaid-коду вместо chart — только если код уже есть (например, из create_mermaid), не для написания графика с нуля' },
@@ -1135,8 +1257,60 @@ export function createTools(): AgentTool[] {
       },
       execute: async (_ctx, args) => {
         if (!args.chart && !args.mermaid) return { ok: false, summary: '', error: 'Требуется chart или mermaid.' };
-        return generateFileTool('png', args.chart ? { chart: args.chart } : { mermaid: args.mermaid }, 'PNG');
+        if (args.chart) return renderChartTool(args.chart as Record<string, unknown>);
+        return generateFileTool('png', { mermaid: args.mermaid }, 'PNG');
       },
+    },
+    {
+      schema: {
+        name: 'create_presentation',
+        description: `Сформировать настоящую презентацию (слайды с полноэкранным показом, переходами, печатью в PDF) — НЕ плоский HTML-отчёт (для отчётов есть create_html, это другое). Игнорируй presentation-creator из list_skills/read_skill, если он попадётся — это скил про другой формат (React/Vite-сборка со стилем Sentry), к нашим презентациям отношения не имеет; для презентаций используй ИСКЛЮЧИТЕЛЬНО этот тул.
+
+Дизайн-принципы (следуй им при написании содержимого слайдов):
+${PRESENTATION_DESIGN_RULES}
+
+Каждый слайд — объект с полем layout (обязательно) и полями по типу:
+- title (титульный, первый слайд): heading1 (название доклада), subtitle (kicker), speaker (докладчик), image_url (фон, опционально).
+- section (шмуцтитул раздела): heading1, heading2 (подзаголовок), image_url (фон половины слайда, опционально).
+- bullets: heading1 (+heading2 вторая строка), bullets (массив строк), image_url (иллюстрация сбоку, опционально).
+- cards: heading1, cards ([{title, body}]), image_url (опционально).
+- table: heading1, table ({headers, rows}), image_url (опционально).
+- photo: heading1, heading2, bullets, image_url (фон на весь слайд — для этого layout почти всегда нужен).
+- final (обязательно последним слайдом): speaker (опционально — иначе возьмётся presenter) — шаблон сам добавит «Спасибо за внимание» и QR контакта докладчика, если заданы presenter_phone/presenter_email.
+
+image_url — обычная ссылка (из get_photo_link по фото из Фотобанка, или ссылка, которую только что вернул create_png) — не data URI, не путь в вольте.`,
+        input_schema: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', description: 'Название презентации' },
+            slides: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  layout: { type: 'string', enum: ['title', 'section', 'bullets', 'cards', 'table', 'photo', 'final'] },
+                  heading1: { type: 'string' },
+                  heading2: { type: 'string' },
+                  subtitle: { type: 'string' },
+                  bullets: { type: 'array', items: { type: 'string' } },
+                  cards: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, body: { type: 'string' } }, required: ['title', 'body'] } },
+                  table: { type: 'object', properties: { headers: { type: 'array', items: { type: 'string' } }, rows: { type: 'array', items: { type: 'array', items: { type: 'string' } } } } },
+                  speaker: { type: 'string' },
+                  footer: { type: 'string', description: 'Переопределить нижнюю подпись слайда (по умолчанию — дата · название доклада · номер)' },
+                  image_url: { type: 'string', description: 'Ссылка на фото (get_photo_link) или график (create_png) для этого слайда' },
+                },
+                required: ['layout'],
+              },
+            },
+            presenter: { type: 'string', description: 'Докладчик (для финального слайда, если у слайда не задан свой speaker)' },
+            presenter_phone: { type: 'string', description: 'Телефон докладчика — для QR-контакта на финальном слайде (опционально)' },
+            presenter_email: { type: 'string', description: 'Email докладчика — для QR-контакта на финальном слайде (опционально)' },
+            date: { type: 'string', description: 'Дата доклада, для подписи слайдов (опционально)' },
+          },
+          required: ['title', 'slides'],
+        },
+      },
+      execute: async (_ctx, args) => createPresentationTool(args),
     },
     {
       schema: {

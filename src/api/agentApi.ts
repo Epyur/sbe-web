@@ -30,6 +30,24 @@ export async function generateFile(format: string, spec: Record<string, unknown>
   });
 }
 
+/** Сохраняет уже отрисованный на клиенте файл (график ApexCharts —
+ * modules/agent/chartRenderer.ts, или презентация — presentationRenderer.ts)
+ * в S3 — тот же формат ответа, что у generateFile; extWithDot включает точку
+ * (например ".png"/".html"), сервер по нему же определяет допустимость. */
+export async function storeClientFile(blob: Blob, fileName: string, extWithDot: string): Promise<FileGenerateResponse> {
+  const form = new FormData();
+  form.set('file', blob, `${fileName}${extWithDot}`);
+  form.set('file_name', fileName);
+  const res = await apiRequest(`${API_BASE}/api/agent/file/store`, {
+    method: 'POST',
+    headers: await authHeader(),
+    body: form,
+    timeoutMs: 60000,
+  });
+  await assertOk(res);
+  return (await res.json()) as FileGenerateResponse;
+}
+
 export async function parseFile(file: File): Promise<FileParseResponse> {
   const form = new FormData();
   form.set('file', file, file.name);
