@@ -269,21 +269,53 @@ export async function readScratchRecords(key: string): Promise<{ records: unknow
   });
 }
 
-// ================= ЮГайл (agent-service — прокси, без CORS-проблемы браузера) =================
-// Пароль ЮГайла и обмен на ключ — целиком на сервере (agent-service); сюда
-// приходят уже готовые данные ЮГайла. Удаления здесь нет ни одного метода —
+// ================= YouGile (agent-service — прокси, без CORS-проблемы браузера) =================
+// Пароль YouGile и обмен на ключ — целиком на сервере (agent-service); сюда
+// приходят уже готовые данные YouGile. Удаления здесь нет ни одного метода —
 // см. docs/superpowers/specs/2026-09-06-web-agent-yougile-design.md.
 
-export async function getYougileTasks(filter: { columnId?: string; assignedTo?: string }): Promise<Record<string, unknown>[]> {
+export async function getYougileTasks(filter: { columnId?: string; assignedTo?: string; mine?: boolean }): Promise<Record<string, unknown>[]> {
   const params = new URLSearchParams();
   if (filter.columnId) params.set('columnId', filter.columnId);
   if (filter.assignedTo) params.set('assignedTo', filter.assignedTo);
+  if (filter.mine) params.set('mine', '1');
   const qs = params.toString();
   const data = await requestJSON<{ content?: Record<string, unknown>[] }>(
     `${API_BASE}/api/agent/yougile/tasks${qs ? `?${qs}` : ''}`,
     { headers: await authHeader(), timeoutMs: 60000 },
   );
   return Array.isArray(data.content) ? data.content : [];
+}
+
+export interface YougileSeriesPoint {
+  period: string;
+  arrived: number;
+  completed: number;
+}
+
+export interface YougileExecutorStat {
+  user_id: string;
+  name: string;
+  email: string;
+  created: number;
+  completed: number;
+}
+
+export interface YougileTaskStats {
+  series: YougileSeriesPoint[];
+  by_executor: YougileExecutorStat[];
+  total_touched: number;
+}
+
+/** Счёт поступивших/завершённых задач по периодам + разбивка по исполнителям
+ * за диапазон дат — считает сервер по уже полученным данным (не сырые
+ * карточки в контексте модели), тот же принцип, что и у get_lims_requests
+ * group_by. Фикс живой жалобы 2026-09-06 (см. agent-service/yougile_stats.go). */
+export async function getYougileTaskStats(dateFrom: string, dateTo: string, groupBy: 'day' | 'week' | 'month'): Promise<YougileTaskStats> {
+  const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo, group_by: groupBy });
+  return requestJSON<YougileTaskStats>(`${API_BASE}/api/agent/yougile/task-stats?${params.toString()}`, {
+    headers: await authHeader(), timeoutMs: 60000,
+  });
 }
 
 export interface YougileBoardTree {
@@ -319,7 +351,7 @@ export async function setYougileTaskStatus(taskId: string, columnId: string): Pr
 }
 
 /** Сообщение в чат задачи + необязательный файл (встраивается сервером как
- * ссылка/картинка в текст — в API ЮГайла нет отдельного поля «вложение»). */
+ * ссылка/картинка в текст — в API YouGile нет отдельного поля «вложение»). */
 export async function addYougileTaskMessage(taskId: string, text: string, file?: File): Promise<void> {
   const form = new FormData();
   form.set('text', text);

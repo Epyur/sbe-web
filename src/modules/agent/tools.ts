@@ -395,8 +395,8 @@ async function getPhotoLinkTool(args: Record<string, unknown>): Promise<ToolCall
   }
 }
 
-// ================= ЮГайл (agent-service — прокси, без CORS-проблемы браузера) =================
-// Пароль ЮГайла и обмен на ключ — целиком на сервере (agent-service, см.
+// ================= YouGile (agent-service — прокси, без CORS-проблемы браузера) =================
+// Пароль YouGile и обмен на ключ — целиком на сервере (agent-service, см.
 // agentApi.ts); тулы здесь только формируют/фильтруют данные для модели.
 // Удаления НЕТ ни одного тула — ни задач, ни досок, ни проектов, категорически
 // запрещено пользователем. См. docs/superpowers/specs/
@@ -407,15 +407,16 @@ async function getYougileTasksTool(args: Record<string, unknown>): Promise<ToolC
     const query = String(args.query || '').trim().toLowerCase();
     const columnId = String(args.column_id || '').trim();
     const assignedTo = String(args.assigned_to || '').trim();
+    const mine = args.mine === true;
     const limit = Math.max(1, Math.min(Number(args.limit) || 30, 200));
-    let items = await agentApi.getYougileTasks({ columnId, assignedTo });
+    let items = await agentApi.getYougileTasks({ columnId, assignedTo, mine });
     if (query) {
       items = items.filter(t => Object.values(t).some(v => typeof v === 'string' && v.toLowerCase().includes(query)));
     }
     const picked = items.slice(0, limit);
     return {
       ok: true,
-      summary: `ЮГайл: найдено задач ${items.length}, показано ${picked.length}.`,
+      summary: `YouGile: найдено задач ${items.length}, показано ${picked.length}.`,
       data: { total: items.length, items: picked },
     };
   } catch (e: unknown) {
@@ -428,8 +429,27 @@ async function getYougileBoardTreeTool(): Promise<ToolCallResult> {
     const tree = await agentApi.getYougileBoardTree();
     return {
       ok: true,
-      summary: `ЮГайл: проектов ${tree.projects.length}, досок ${tree.boards.length}, колонок ${tree.columns.length}, пользователей ${tree.users.length}. Используй id колонки для создания задачи (create_yougile_task) и смены статуса (set_yougile_task_status).`,
+      summary: `YouGile: проектов ${tree.projects.length}, досок ${tree.boards.length}, колонок ${tree.columns.length}, пользователей ${tree.users.length}. Используй id колонки для создания задачи (create_yougile_task) и смены статуса (set_yougile_task_status).`,
       data: tree,
+    };
+  } catch (e: unknown) {
+    return { ok: false, summary: '', error: errorMessage(e) };
+  }
+}
+
+async function getYougileTaskStatsTool(args: Record<string, unknown>): Promise<ToolCallResult> {
+  const dateFrom = String(args.date_from || '').trim();
+  const dateTo = String(args.date_to || '').trim();
+  const groupBy = String(args.group_by || '').trim();
+  if (!dateFrom || !dateTo || !['day', 'week', 'month'].includes(groupBy)) {
+    return { ok: false, summary: '', error: 'Требуются date_from, date_to (YYYY-MM-DD) и group_by (day/week/month).' };
+  }
+  try {
+    const stats = await agentApi.getYougileTaskStats(dateFrom, dateTo, groupBy as 'day' | 'week' | 'month');
+    return {
+      ok: true,
+      summary: `YouGile: период ${dateFrom}..${dateTo}, периодов в графике ${stats.series.length}, исполнителей ${stats.by_executor.length}. Уже посчитано — НЕ пересчитывай вручную по отдельным задачам, бери data.series как готовые точки графика (period — подпись оси X, arrived — поступление, completed — завершение) и data.by_executor как готовую разбивку по людям (created/completed).`,
+      data: stats,
     };
   } catch (e: unknown) {
     return { ok: false, summary: '', error: errorMessage(e) };
@@ -450,7 +470,7 @@ async function createYougileTaskTool(args: Record<string, unknown>): Promise<Too
     const task = await agentApi.createYougileTask(payload);
     return {
       ok: true,
-      summary: `ЮГайл: задача «${title}» создана (id ${String(task.id || '?')}).`,
+      summary: `YouGile: задача «${title}» создана (id ${String(task.id || '?')}).`,
       data: task,
     };
   } catch (e: unknown) {
@@ -466,7 +486,7 @@ async function setYougileTaskStatusTool(args: Record<string, unknown>): Promise<
   }
   try {
     await agentApi.setYougileTaskStatus(taskId, columnId);
-    return { ok: true, summary: `ЮГайл: статус задачи ${taskId} изменён.`, data: { task_id: taskId, column_id: columnId } };
+    return { ok: true, summary: `YouGile: статус задачи ${taskId} изменён.`, data: { task_id: taskId, column_id: columnId } };
   } catch (e: unknown) {
     return { ok: false, summary: '', error: errorMessage(e) };
   }
@@ -482,7 +502,7 @@ async function addYougileTaskMessageTool(args: Record<string, unknown>, attachme
     await agentApi.addYougileTaskMessage(taskId, text, file);
     return {
       ok: true,
-      summary: `ЮГайл: сообщение в чат задачи ${taskId} отправлено${attachment ? ` (с файлом «${attachment.name}»)` : ''}.`,
+      summary: `YouGile: сообщение в чат задачи ${taskId} отправлено${attachment ? ` (с файлом «${attachment.name}»)` : ''}.`,
       data: { task_id: taskId },
     };
   } catch (e: unknown) {
@@ -969,13 +989,14 @@ export function createTools(): AgentTool[] {
     {
       schema: {
         name: 'get_yougile_tasks',
-        description: 'Читает задачи ЮГайла (доступно, если у пользователя настроен пароль ЮГайла в настройках веб-портала). Возвращает сырые карточки задач ЮГайла (id, title, description, columnId, assigned, deadline и др.). Фильтруй по тексту через query (ищет по всем строковым полям) или по column_id/assigned_to, если уже знаешь id.',
+        description: 'Читает задачи YouGile (доступно, если у пользователя настроен пароль YouGile в настройках веб-портала). Возвращает сырые карточки задач YouGile (id, title, description, columnId, assigned, deadline и др.). Для «мои задачи» используй mine:true — НЕ ходи за списком пользователей ради этого. Для вопросов про объём/динамику задач по периодам и/или исполнителям используй get_yougile_task_stats, а не эту (нельзя пересчитывать вручную сотни карточек — это раздувает контекст и роняет следующий запрос к модели, живой инцидент 2026-09-06). Фильтруй по тексту через query (ищет по всем строковым полям) или по column_id/assigned_to, если уже знаешь id.',
         input_schema: {
           type: 'object',
           properties: {
             query: { type: 'string', description: 'Поиск по всем текстовым полям задачи (название, описание и т.п.)' },
-            column_id: { type: 'string', description: 'id колонки ЮГайла (узнать через get_yougile_board_tree)' },
-            assigned_to: { type: 'string', description: 'id исполнителя ЮГайла (узнать через get_yougile_board_tree)' },
+            column_id: { type: 'string', description: 'id колонки YouGile (узнать через get_yougile_board_tree)' },
+            assigned_to: { type: 'string', description: 'id исполнителя YouGile (узнать через get_yougile_board_tree)' },
+            mine: { type: 'boolean', description: 'true — только задачи, назначенные текущему пользователю (сервер сам резолвит id по email, узнавать id заранее не нужно)' },
             limit: { type: 'number', description: 'По умолчанию 30, максимум 200' },
           },
         },
@@ -984,8 +1005,24 @@ export function createTools(): AgentTool[] {
     },
     {
       schema: {
+        name: 'get_yougile_task_stats',
+        description: 'Счёт поступивших/завершённых задач YouGile по периодам (день/неделя/месяц) + готовая разбивка по исполнителям за диапазон дат — считает сервер по всем задачам компании, НЕ модель по сырым карточкам. Используй для любого вопроса про объём/динамику/нагрузку по задачам YouGile (в т.ч. для презентаций/графиков) вместо get_yougile_tasks с ручным подсчётом.',
+        input_schema: {
+          type: 'object',
+          properties: {
+            date_from: { type: 'string', description: 'Начало периода, YYYY-MM-DD' },
+            date_to: { type: 'string', description: 'Конец периода, YYYY-MM-DD' },
+            group_by: { type: 'string', enum: ['day', 'week', 'month'], description: 'Бакетирование точек графика' },
+          },
+          required: ['date_from', 'date_to', 'group_by'],
+        },
+      },
+      execute: async (_ctx, args) => getYougileTaskStatsTool(args),
+    },
+    {
+      schema: {
         name: 'get_yougile_board_tree',
-        description: 'Справочники ЮГайла одним вызовом: проекты, доски, колонки, пользователи (id + название/email каждого). Вызывай перед create_yougile_task/set_yougile_task_status, чтобы сопоставить название доски/колонки/исполнителя, названное пользователем, с нужным id.',
+        description: 'Справочники YouGile одним вызовом: проекты, доски, колонки, пользователи (id + название/email каждого). Вызывай перед create_yougile_task/set_yougile_task_status, чтобы сопоставить название доски/колонки/исполнителя, названное пользователем, с нужным id.',
         input_schema: { type: 'object', properties: {} },
       },
       execute: async () => getYougileBoardTreeTool(),
@@ -993,14 +1030,14 @@ export function createTools(): AgentTool[] {
     {
       schema: {
         name: 'create_yougile_task',
-        description: 'Создать новую задачу в ЮГайле в указанной колонке. Сначала вызови get_yougile_board_tree, чтобы узнать column_id нужной доски/колонки (и id исполнителя, если пользователь назвал его по имени).',
+        description: 'Создать новую задачу в YouGile в указанной колонке. Сначала вызови get_yougile_board_tree, чтобы узнать column_id нужной доски/колонки (и id исполнителя, если пользователь назвал его по имени).',
         input_schema: {
           type: 'object',
           properties: {
             title: { type: 'string', description: 'Название задачи' },
-            column_id: { type: 'string', description: 'id колонки ЮГайла, куда поместить задачу (из get_yougile_board_tree)' },
+            column_id: { type: 'string', description: 'id колонки YouGile, куда поместить задачу (из get_yougile_board_tree)' },
             description: { type: 'string', description: 'Описание задачи (необязательно)' },
-            assigned: { type: 'array', items: { type: 'string' }, description: 'id исполнителей ЮГайла (необязательно, из get_yougile_board_tree)' },
+            assigned: { type: 'array', items: { type: 'string' }, description: 'id исполнителей YouGile (необязательно, из get_yougile_board_tree)' },
           },
           required: ['title', 'column_id'],
         },
@@ -1010,7 +1047,7 @@ export function createTools(): AgentTool[] {
     {
       schema: {
         name: 'set_yougile_task_status',
-        description: 'Сменить статус задачи ЮГайла — в ЮГайле статус это колонка, к которой относится задача. Узнай column_id нужного статуса через get_yougile_board_tree.',
+        description: 'Сменить статус задачи YouGile — в YouGile статус это колонка, к которой относится задача. Узнай column_id нужного статуса через get_yougile_board_tree.',
         input_schema: {
           type: 'object',
           properties: {
@@ -1025,7 +1062,7 @@ export function createTools(): AgentTool[] {
     {
       schema: {
         name: 'add_yougile_task_message',
-        description: 'Добавить сообщение (и/или файл, если пользователь его прикрепил в чате) в чат конкретной задачи ЮГайла.',
+        description: 'Добавить сообщение (и/или файл, если пользователь его прикрепил в чате) в чат конкретной задачи YouGile.',
         input_schema: {
           type: 'object',
           properties: {

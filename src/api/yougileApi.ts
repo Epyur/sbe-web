@@ -2,8 +2,8 @@ import { API_BASE } from '../config';
 import { requestJSON, apiRequest, assertOk } from './http';
 import { getToken } from './authApi';
 
-// Настройки подключения к ЮГайлу — 1:1 с llmApi.ts (тот же паттерн хранения
-// секрета пользователя на сервере). Логин ЮГайла = email пользователя (тот же,
+// Настройки подключения к YouGile — 1:1 с llmApi.ts (тот же паттерн хранения
+// секрета пользователя на сервере). Логин YouGile = email пользователя (тот же,
 // что в ЦУП), companyId — константа сервера; в UI задаётся только пароль.
 
 const APP_ID = 'agent';

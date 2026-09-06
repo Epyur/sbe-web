@@ -25,7 +25,7 @@ async function load(): Promise<void> {
 }
 onMounted(load);
 
-// ================= ЮГайл =================
+// ================= YouGile =================
 const yougileConnected = ref(false);
 const yougilePassword = ref('');
 const yougileError = ref('');
@@ -150,9 +150,9 @@ async function remove(): Promise<void> {
   </div>
 
   <div class="sw-card" style="max-width: 480px; padding: 24px; margin-top: 16px">
-    <h2>ЮГайл</h2>
+    <h2>YouGile</h2>
     <p class="sw-hint">
-      Пароль от вашей учётной записи ЮГайла — шифруется и хранится на сервере,
+      Пароль от вашей учётной записи YouGile — шифруется и хранится на сервере,
       привязан к вашей почте (логин = ваш email в ЦУП). Нужен, чтобы агент LogicTEAM.007
       мог читать и создавать задачи, писать в чат задачи и менять её статус.
     </p>
@@ -162,7 +162,7 @@ async function remove(): Promise<void> {
       <p class="sw-hint">Состояние: {{ yougileConnected ? 'подключено' : 'не подключено' }}</p>
 
       <div class="sw-field">
-        <label>Пароль ЮГайла</label>
+        <label>Пароль YouGile</label>
         <input v-model="yougilePassword" class="sw-input" type="password" :disabled="yougileBusy" />
       </div>
 
